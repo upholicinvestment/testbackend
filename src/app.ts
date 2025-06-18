@@ -64,7 +64,7 @@ app.get('/api/stocks', async (_req, res) => {
       236, 3456
     ];
 
-    const stocks = await db.collection('live_data')
+    const stocks = await db.collection('nse_equity')
       .find({ security_id: { $in: securityIds } })
       .project({
         _id: 0,
@@ -107,7 +107,7 @@ app.get('/api/advdec', async (req: Request, res: Response): Promise<void> => {
     }
 
     // Fetch all of today's records (between open and close)
-    const records = await db.collection('advance_decline')
+    const records = await db.collection('nse_equity')
       .find({ timestamp: { $gte: marketOpen, $lte: marketClose } })
       .sort({ timestamp: 1 })
       .toArray();
@@ -158,7 +158,6 @@ app.get('/api/advdec', async (req: Request, res: Response): Promise<void> => {
     });
   }
 });
-
 
 
 app.get('/api/nifty/atm-strikes-timeline', async (req: Request, res: Response): Promise<void> => {
@@ -2366,6 +2365,16 @@ httpServer.listen(PORT,
     console.log(`🔗 Allowed CORS origin: ${process.env.CLIENT_URL || 'http://localhost:5173'}`);
   });
 
+
+// const PORT = Number(process.env.PORT) || 8000;
+// const HOST = process.env.HOST || '0.0.0.0';
+
+// httpServer.listen(PORT,
+  // HOST,
+  // () => {
+    // console.log(`🚀 Server running at http://${HOST}:${PORT}`);
+    // console.log(`🔗 Allowed CORS origin: ${process.env.CLIENT_URL || 'http://localhost:5173'}`);
+  // });
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
