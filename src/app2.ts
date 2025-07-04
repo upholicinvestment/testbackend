@@ -425,13 +425,14 @@ const securities = [
   { name: "UNOMINDA JUL FUT", security_id: 65239, sector: "Automotive" }
 ];
 
+
 interface StockData {
   _id: string;
   trading_symbol: string;
   LTP: string;
   close: string;
   sector: string;
-  security_id: number | string;
+  security_id: number;
   change?: number;
   [key: string]: any;
 }
@@ -439,79 +440,92 @@ interface StockData {
 app.get('/api/heatmap', async (req, res) => {
   try {
     const collection = db.collection('nse_fno_stock');
-    console.log('Connected to collection:', collection.collectionName);
 
-    const securityIds = securities.map(s => s.security_id);
-    console.log(`Looking for ${securityIds.length} securities:`, securityIds.slice(0, 5), '...'); // Show first 5 IDs
+    // Build a map for fast lookup
+    const securityIdMap = new Map<number, { name: string; sector: string }>();
+    const securityIds: number[] = [];
 
-    // Query as any[]
-    let items: any[] = await collection.find({ security_id: { $in: securityIds } })
-      .sort({ _id: -1 })
+    securities.forEach(sec => {
+      securityIdMap.set(sec.security_id, {
+        name: sec.name,
+        sector: sec.sector
+      });
+      securityIds.push(sec.security_id);
+    });
 
-      .toArray();
-    console.log(`First query found ${items.length} items with numeric security_ids`);
-
-    // If none found, try string IDs
-    if (!items || items.length === 0) {
-      console.log('Trying with string security_ids...');
-      items = await collection.find({ security_id: { $in: securityIds.map(id => id.toString()) } })
-        .sort({ _id: -1 })
-
-        .toArray();
-      console.log(`Second query found ${items.length} items with string security_ids`);
-    }
-
-    // Fallback: get latest 50 (unfiltered)
-    let fallbackItems: any[] = [];
-    if (!items || items.length === 0) {
-      console.log('No items found with security_ids, falling back to latest 50');
-      try {
-        fallbackItems = await collection.find({}).sort({ _id: -1 }).limit(50).toArray();
-        console.log(`Fallback query found ${fallbackItems.length} items`);
-      } catch (fallbackError: unknown) {
-        let msg = 'Unknown fallback error';
-        if (fallbackError instanceof Error) {
-          msg = fallbackError.message;
+    // Aggregation pipeline
+    const pipeline = [
+      {
+        $match: {
+          security_id: { $in: securityIds }
         }
-        console.error('Error during fallback DB query:', msg);
-        fallbackItems = [];
+      },
+      {
+        $sort: { received_at: -1 }
+      },
+      {
+        $group: {
+          _id: "$security_id",
+          latestDoc: { $first: "$$ROOT" }
+        }
+      },
+      {
+        $replaceRoot: { newRoot: "$latestDoc" }
+      },
+      {
+        $project: {
+          _id: 1,
+          security_id: 1,
+          LTP: 1,
+          close: 1,
+          received_at: 1
+        }
       }
-    }
+    ];
 
-    const resultItems: any[] =
-      (Array.isArray(items) && items.length > 0)
-        ? items
-        : (Array.isArray(fallbackItems) ? fallbackItems : []);
-    console.log(`Total items to process: ${resultItems.length}`);
+    // Run aggregation
+    const cursor = collection.aggregate(pipeline);
+    const items = await cursor.toArray();
 
-    // Attach trading_symbol and sector from securities list
-    const processedItems: StockData[] = resultItems.map((item) => {
-      const secIdNum = Number(item.security_id); // Always compare as number
-      const found = securities.find(sec => Number(sec.security_id) === secIdNum);
+    // Process data
+    const processedItems: StockData[] = items.map(item => {
+      const securityId = Number(item.security_id);
+      const securityInfo = securityIdMap.get(securityId);
+
+      const ltp = parseFloat(item.LTP ?? '0');
+      const close = parseFloat(item.close ?? '0');
+
+      const change =
+        ltp && close && !isNaN(ltp) && !isNaN(close) && close !== 0
+          ? ((ltp - close) / close) * 100
+          : undefined;
+
       return {
-        ...item,
-        trading_symbol: found ? found.name : '',
-        sector: found ? found.sector : (item.sector || 'Unknown')
+        _id: item._id?.toString() ?? '',
+        trading_symbol: securityInfo?.name ?? '',
+        LTP: item.LTP ?? '',
+        close: item.close ?? '',
+        sector: securityInfo?.sector ?? 'Unknown',
+        security_id: securityId,
+        change
       };
     });
 
-    console.log('\nFinal processed items count:', processedItems.length);
-    console.log('Sample of first 5 processed items:');
-    console.log(JSON.stringify(processedItems.slice(0, 5), null, 2)); // Print first 5 for debug
-
+    // Set headers and send response
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=30');
+    res.setHeader('Vary', 'Accept-Encoding');
     res.json(processedItems);
-  } catch (error: unknown) {
-    let msg = 'Unknown error';
-    if (error instanceof Error) {
-      msg = error.message;
-    }
-    console.error('\nError fetching heatmap data:', error);
+  } catch (error) {
+    console.error('Error fetching heatmap data:', error);
     res.status(500).json({
       error: 'Internal server error',
-      details: msg
+      details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });
+
+
+
 
 
 // Error handling middleware (must be after routes)
