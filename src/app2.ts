@@ -527,7 +527,6 @@ app.get('/api/heatmap', async (req, res) => {
 
 
 
-
 // Error handling middleware (must be after routes)
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   errorMiddleware(err, req, res, next);
