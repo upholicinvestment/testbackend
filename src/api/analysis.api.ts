@@ -63,46 +63,23 @@ function normalizeDate(dateString: string, source: 'nse' | 'cash' | 'nifty'): st
 app.get("/api/net-oi", async (req, res) => {
 
   try {
-
     const nseColl = db.collection("nse");
-
     const niftyColl = db.collection("Nifty");
-
     const cashColl = db.collection("cash_data_nse");
-
-
-
     // Fetch all FII & Client rows
-
     const nseData = await nseColl
-
       .find({ "Client Type": { $in: ["FII", "Client"] } })
-
       .toArray();
-
-
-
     // Fetch all Nifty rows
-
     const niftyData = await niftyColl.find({}).toArray();
 
-
-
     // Fetch all cash data for FII/FPI * and DII **
-
     const cashData = await cashColl
-
       .find({ CATEGORY: { $in: ["FII/FPI *", "DII **"] } })
-
       .sort({ DATE: 1 }) // optional
-
       .toArray();
 
-
-
     // const netOIMap = {};
-
-
     const netOIMap: Record<
       string,
       {
@@ -117,82 +94,45 @@ app.get("/api/net-oi", async (req, res) => {
       }
     > = {};
 
-
-
-
     // Process NSE data (FII & Client)
-
     nseData.forEach(row => {
-
       // const date = normalizeDate(row["Date"], "nse");
-
       const raw = normalizeDate(row["Date"], "nse");
       if (!raw) return; // or `continue` if you’re in a `for`‌loop
       const date = raw;
 
-
       const clientType = row["Client Type"];
 
-
-
       if (!netOIMap[date]) {
-
         netOIMap[date] = {
-
           date,
-
           FII_Index_Futures: 0,
-
           FII_Index_Options: 0,
-
           Client_Index_Futures: 0,
-
           Client_Index_Options: 0,
-
           Nifty_Close: 0,
-
           FII_Cash_Net: 0,
-
           DII_Cash_Net: 0
-
         };
-
       }
-
-
 
       const indexFutures =
-
         (row["Future Index Long"] || 0) - (row["Future Index Short"] || 0);
-
       const indexOptions =
-
         ((row["Option Index Call Long"] || 0) - (row["Option Index Call Short"] || 0)) -
-
         ((row["Option Index Put Long"] || 0) - (row["Option Index Put Short"] || 0));
 
-
-
       if (clientType === "FII") {
-
         netOIMap[date].FII_Index_Futures = indexFutures;
-
         netOIMap[date].FII_Index_Options = indexOptions;
-
       } else if (clientType === "Client") {
-
         netOIMap[date].Client_Index_Futures = indexFutures;
-
         netOIMap[date].Client_Index_Options = indexOptions;
-
       }
-
     });
 
 
-
     // Process Nifty data
-
     niftyData.forEach(row => {
       const raw = normalizeDate(row["Date"], "nifty");
       if (!raw) return;
@@ -201,7 +141,6 @@ app.get("/api/net-oi", async (req, res) => {
         netOIMap[date].Nifty_Close = Number(row["Close"] || 0);
       }
     });
-
 
 
     cashData.forEach(row => {
@@ -217,33 +156,18 @@ app.get("/api/net-oi", async (req, res) => {
       }
     });
 
-
     // Convert map to sorted array by actual date
-
     const mergedData = Object.values(netOIMap).sort((a, b) => {
-
       return (
-
         // dayjs(a.date, "DD-MM-YYYY").toDate() - dayjs(b.date, "DD-MM-YYYY").toDate()
-
         dayjs(a.date, "DD-MM-YYYY").toDate().getTime() - dayjs(b.date, "DD-MM-YYYY").toDate().getTime()
-
       );
-
     });
 
-
-
     res.json(mergedData);
-
   } catch (err) {
-
     console.error("Error in /api/net-oi:", err);
-
     res.status(500).send("Internal Server Error");
-
   }
-
 });
-
 }
