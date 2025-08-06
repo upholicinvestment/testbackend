@@ -14,7 +14,15 @@ const generateToken = (userId: string) => {
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, email, password, phone, initialProductId, initialVariantId, brokerConfig } = req.body as {
+    const {
+      name,
+      email,
+      password,
+      phone,
+      initialProductId,
+      initialVariantId,
+      brokerConfig,
+    } = req.body as {
       name: string;
       email: string;
       password: string;
@@ -23,10 +31,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       initialVariantId?: string;
       brokerConfig?: {
         brokerName: string;
-        clientId: string;
-        smartApiKey: string;
-        brokerPin: string;
-        totpSecret: string;
+        [key: string]: string; // dynamic keys like ZERODHA_API_KEY
       };
     };
 
@@ -40,16 +45,15 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     });
 
     if (existingUser) {
-      if (existingUser.email === email) {
-        res.status(400).json({ message: 'User with this email already exists' });
-      } else {
-        res.status(400).json({ message: 'User with this phone number already exists' });
-      }
+      const errorMsg = existingUser.email === email
+        ? 'User with this email already exists'
+        : 'User with this phone number already exists';
+      res.status(400).json({ message: errorMsg });
       return;
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const result = await db.collection('users').insertOne({
+    const userInsert = await db.collection('users').insertOne({
       name,
       email,
       phone,
@@ -59,75 +63,87 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       updatedAt: new Date(),
     });
 
+    // 🧠 Insert product mapping if selected
     if (initialProductId) {
       const product = await db.collection('products').findOne({
         _id: new ObjectId(initialProductId),
         isActive: true,
       });
 
-      if (product) {
-        let variantId: ObjectId | null = null;
+      if (!product) {
+        res.status(400).json({ message: 'Selected product not found or inactive' });
+        return;
+      }
 
-        if (product.hasVariants) {
-          if (!initialVariantId) {
-            res.status(400).json({ message: 'Please select a plan for the chosen product.' });
-            return;
-          }
+      let variantId: ObjectId | null = null;
 
-          const variant = await db.collection('product_variants').findOne({
-            _id: new ObjectId(initialVariantId),
-            productId: product._id,
-            isActive: true,
-          });
-
-          if (!variant) {
-            res.status(400).json({ message: 'Selected plan is invalid or inactive.' });
-            return;
-          }
-
-          variantId = variant._id;
+      if (product.hasVariants) {
+        if (!initialVariantId) {
+          res.status(400).json({ message: 'Please select a plan for the chosen product.' });
+          return;
         }
 
-        await db.collection('user_products').insertOne({
-          userId: result.insertedId,
+        const variant = await db.collection('product_variants').findOne({
+          _id: new ObjectId(initialVariantId),
           productId: product._id,
-          variantId,
-          status: 'active',
-          startedAt: new Date(),
-          endsAt: null,
-          meta: { source: 'signup', interval: 'monthly' },
+          isActive: true,
         });
 
-        // ✅ Insert broker config if product is ALGO SIMULATOR
-        if (product.key === 'algo_simulator' && variantId && brokerConfig) {
-          await db.collection('broker_configs').insertOne({
-            userId: result.insertedId,
-            productId: product._id,
-            variantId,
-            brokerName: brokerConfig.brokerName,
-            clientId: brokerConfig.clientId,
-            smartApiKey: brokerConfig.smartApiKey,
-            brokerPin: brokerConfig.brokerPin,
-            totpSecret: brokerConfig.totpSecret,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          });
+        if (!variant) {
+          res.status(400).json({ message: 'Selected plan is invalid or inactive.' });
+          return;
         }
+
+        variantId = variant._id;
+      }
+
+      await db.collection('user_products').insertOne({
+        userId: userInsert.insertedId,
+        productId: product._id,
+        variantId,
+        status: 'active',
+        startedAt: new Date(),
+        endsAt: null,
+        meta: { source: 'signup', interval: 'monthly' },
+      });
+
+      // ✅ Save broker config only if ALGO product
+      if (product.key === 'algo_simulator' && variantId && brokerConfig?.brokerName) {
+        const { brokerName, ...fields } = brokerConfig;
+
+        const brokerDoc = {
+          userId: userInsert.insertedId,
+          productId: product._id,
+          variantId,
+          brokerName,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...fields,
+        };
+
+        console.log("📦 Broker Config Payload:", brokerDoc);
+
+        await db.collection('broker_configs').insertOne(brokerDoc);
       }
     }
 
-    const token = generateToken(result.insertedId.toString());
-    console.log('[auth.register] JWT issued for user', result.insertedId.toString(), token);
+    const token = generateToken(userInsert.insertedId.toString());
 
     res.status(201).json({
       token,
-      user: { id: result.insertedId, name, email, phone },
+      user: {
+        id: userInsert.insertedId,
+        name,
+        email,
+        phone,
+      },
     });
   } catch (err) {
-    console.error('Register error:', err);
+    console.error('❌ Register error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 };
+
 
 
 export const login = async (req: Request, res: Response): Promise<void> => {

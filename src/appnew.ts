@@ -15,14 +15,14 @@ import authRoutes from "./routes/auth.routes";
 import { errorMiddleware } from "./middleware/error.middleware";
 import { setDatabase } from "./controllers/auth.controller";
 
-import AnalysisRoutes from "./api/analysis.api";
-import registerNiftyRoutes from "./api/call_put";
-import cash_dataRoutes from "./api/cash data.api";
-import ClientRoutes from "./api/client.api";
-import DIIRoutes from "./api/dii.api";
-import FIIRoutes from "./api/fii.api";
-import ProRoutes from "./api/pro.api";
-import summaryRoutes from "./api/summary.api";
+// import AnalysisRoutes from "./api/analysis.api";
+// import registerNiftyRoutes from "./api/call_put";
+// import cash_dataRoutes from "./api/cash data.api";
+// import ClientRoutes from "./api/client.api";
+// import DIIRoutes from "./api/dii.api";
+// import FIIRoutes from "./api/fii.api";
+// import ProRoutes from "./api/pro.api";
+// import summaryRoutes from "./api/summary.api";
 import { Stocks } from "./api/stocks";
 import { AdvDec } from "./api/advdec";
 import { Heatmap } from "./api/heatmap";
@@ -210,14 +210,14 @@ const connectDB = async () => {
     setProductsDb(db);
 
     // Inject DB into all routes that need it
-    AnalysisRoutes(app, db);
-    registerNiftyRoutes(app, db);
-    cash_dataRoutes(app, db);
-    ClientRoutes(app, db);
-    DIIRoutes(app, db);
-    FIIRoutes(app, db);
-    ProRoutes(app, db);
-    summaryRoutes(app, db);
+    // AnalysisRoutes(app, db);
+    // registerNiftyRoutes(app, db);
+    // cash_dataRoutes(app, db);
+    // ClientRoutes(app, db);
+    // DIIRoutes(app, db);
+    // FIIRoutes(app, db);
+    // ProRoutes(app, db);
+    // summaryRoutes(app, db);
     Stocks(app, db);
     AdvDec(app, db);
     Heatmap(app, db);
