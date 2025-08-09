@@ -230,7 +230,7 @@ const connectDB = async () => {
     });
 
     // Start HTTP + WebSocket server
-    const PORT = Number(process.env.PORT) || 8001;
+    const PORT = Number(process.env.PORT) || 8000;
     httpServer.listen(PORT, () => {
       console.log(`🚀 Server running at http://localhost:${PORT}`);
       console.log(
