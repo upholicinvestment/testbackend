@@ -2,11 +2,17 @@
 import { Request, Response, RequestHandler } from "express";
 import crypto from "crypto";
 import { Db, ObjectId } from "mongodb";
-import { razorpay } from "../services/razorpay.service";
 import jwt from "jsonwebtoken";
+import { razorpay } from "../services/razorpay.service";
 
 let db: Db;
-export const setPaymentDatabase = (database: Db) => { db = database; };
+export const setPaymentDatabase = (database: Db) => {
+  db = database;
+};
+
+const BUNDLE_SKU_KEY = "essentials_bundle";
+const ALGO_SKU_KEY = "algo_simulator";
+const JOURNALING_SOLO_SKU_KEY = "journaling_solo";
 
 const generateToken = (userId: string) => {
   const secret = process.env.JWT_SECRET;
@@ -14,8 +20,33 @@ const generateToken = (userId: string) => {
   return jwt.sign({ id: userId }, secret, { expiresIn: "30d" });
 };
 
-// Create order for a signup intent (no user yet)
-export const createOrder: RequestHandler = async (req: Request, res: Response) => {
+async function getBundleComponentsSet(): Promise<Set<string>> {
+  const bundle = await db
+    .collection("products")
+    .findOne({ key: BUNDLE_SKU_KEY, isActive: true });
+  const comps = Array.isArray((bundle as any)?.components)
+    ? ((bundle as any).components as string[])
+    : [
+        "technical_scanner",
+        "fundamental_scanner",
+        "fno_khazana",
+        "journaling",
+        "fii_dii_data",
+      ];
+  return new Set(comps);
+}
+
+/**
+ * POST /api/payments/create-order
+ * body: { signupIntentId }
+ * - For bundle: uses product.priceMonthly or .env fallback
+ * - For ALGO: requires variant (priceMonthly from variant)
+ * - For Journaling Solo: uses product.priceMonthly
+ */
+export const createOrder: RequestHandler = async (
+  req: Request,
+  res: Response
+) => {
   try {
     const { signupIntentId } = req.body as { signupIntentId: string };
     if (!signupIntentId) {
@@ -23,9 +54,9 @@ export const createOrder: RequestHandler = async (req: Request, res: Response) =
       return;
     }
 
-    const intent = await db.collection("signup_intents").findOne({
-      _id: new ObjectId(signupIntentId),
-    });
+    const intent = await db
+      .collection("signup_intents")
+      .findOne({ _id: new ObjectId(signupIntentId) });
     if (!intent) {
       res.status(404).json({ message: "Signup intent not found" });
       return;
@@ -39,22 +70,37 @@ export const createOrder: RequestHandler = async (req: Request, res: Response) =
       return;
     }
 
-    const product = await db.collection("products").findOne({
-      _id: (intent as any).productId,
-      isActive: true,
-    });
+    const product = await db
+      .collection("products")
+      .findOne({ _id: (intent as any).productId, isActive: true });
     if (!product) {
       res.status(400).json({ message: "Invalid product" });
       return;
     }
 
+    const productKey = (product as any).key as string;
+
     let amountPaise = 0;
     let displayName = (product as any).name;
 
-    if ((product as any).hasVariants) {
+    if (productKey === BUNDLE_SKU_KEY) {
+      // ► Bundle (single price)
+      const bundlePriceFromDb = Number((product as any).priceMonthly);
+      const bundlePriceEnv = Number(process.env.BUNDLE_MONTHLY_PRICE || 4999);
+      const bundlePrice =
+        Number.isFinite(bundlePriceFromDb) && bundlePriceFromDb > 0
+          ? bundlePriceFromDb
+          : bundlePriceEnv;
+
+      amountPaise = Math.round(bundlePrice * 100);
+      displayName = "Trader Essentials Bundle (5-in-1)";
+    } else if (productKey === ALGO_SKU_KEY) {
+      // ► ALGO requires variant
       const variantId = (intent as any).variantId;
       if (!variantId) {
-        res.status(400).json({ message: "variantId required for this product" });
+        res
+          .status(400)
+          .json({ message: "variantId required for this product" });
         return;
       }
       const variant = await db.collection("product_variants").findOne({
@@ -68,27 +114,34 @@ export const createOrder: RequestHandler = async (req: Request, res: Response) =
       }
       const priceMonthly = (variant as any).priceMonthly;
       if (!priceMonthly || typeof priceMonthly !== "number") {
-        res.status(204).send(); // free
+        // Free variant possibility → no order; finalize signup directly on client
+        res.status(204).send();
         return;
       }
       amountPaise = Math.round(priceMonthly * 100);
       displayName = `${(product as any).name} - ${(variant as any).name}`;
-    } else {
-      const priceMonthly = (product as any).priceMonthly;
-      if (!priceMonthly || typeof priceMonthly !== "number") {
-        res.status(204).send(); // free
+    } else if (productKey === JOURNALING_SOLO_SKU_KEY) {
+      // ► Journaling Solo (flat monthly price from DB)
+      const priceMonthly = Number((product as any).priceMonthly);
+      if (!priceMonthly || !Number.isFinite(priceMonthly)) {
+        res
+          .status(400)
+          .json({ message: "Invalid price for Journaling (Solo)" });
         return;
       }
       amountPaise = Math.round(priceMonthly * 100);
+      displayName = (product as any).name; // "Journaling (Solo)"
+    } else {
+      // Not purchasable (components should never reach here)
+      res.status(400).json({ message: "This product is not purchasable" });
+      return;
     }
 
     const order = await razorpay.orders.create({
       amount: amountPaise,
       currency: process.env.CURRENCY || "INR",
       receipt: `rcpt_${Date.now()}`,
-      notes: {
-        signupIntentId: signupIntentId,
-      },
+      notes: { signupIntentId },
     });
 
     const paymentIntent = await db.collection("payment_intents").insertOne({
@@ -121,8 +174,19 @@ export const createOrder: RequestHandler = async (req: Request, res: Response) =
   }
 };
 
-// Verify payment → create user now, mark products, return token+user
-export const verifyPayment: RequestHandler = async (req: Request, res: Response) => {
+/**
+ * POST /api/payments/verify
+ * body: { razorpay_order_id, razorpay_payment_id, razorpay_signature, intentId }
+ * On success:
+ *  - ensures user exists (creates if needed)
+ *  - grants entitlements based on product
+ *  - marks signup/payment intents
+ *  - returns token + user
+ */
+export const verifyPayment: RequestHandler = async (
+  req: Request,
+  res: Response
+) => {
   try {
     const {
       razorpay_order_id,
@@ -136,14 +200,19 @@ export const verifyPayment: RequestHandler = async (req: Request, res: Response)
       intentId: string;
     };
 
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !intentId) {
+    if (
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature ||
+      !intentId
+    ) {
       res.status(400).json({ message: "Missing payment verification fields" });
       return;
     }
 
-    const pIntent = await db.collection("payment_intents").findOne({
-      _id: new ObjectId(intentId),
-    });
+    const pIntent = await db
+      .collection("payment_intents")
+      .findOne({ _id: new ObjectId(intentId) });
     if (!pIntent) {
       res.status(404).json({ message: "Payment intent not found" });
       return;
@@ -157,16 +226,23 @@ export const verifyPayment: RequestHandler = async (req: Request, res: Response)
     if (expected !== razorpay_signature) {
       await db.collection("payment_intents").updateOne(
         { _id: new ObjectId(intentId) },
-        { $set: { status: "failed", updatedAt: new Date(), razorpay_order_id, razorpay_payment_id, razorpay_signature } }
+        {
+          $set: {
+            status: "failed",
+            updatedAt: new Date(),
+            razorpay_order_id,
+            razorpay_payment_id,
+            razorpay_signature,
+          },
+        }
       );
       res.status(400).json({ message: "Invalid signature" });
       return;
     }
 
-    // Load signup intent
-    const sIntent = await db.collection("signup_intents").findOne({
-      _id: (pIntent as any).signupIntentId,
-    });
+    const sIntent = await db
+      .collection("signup_intents")
+      .findOne({ _id: (pIntent as any).signupIntentId });
     if (!sIntent) {
       res.status(404).json({ message: "Signup intent not found" });
       return;
@@ -176,44 +252,72 @@ export const verifyPayment: RequestHandler = async (req: Request, res: Response)
       return;
     }
 
-    // Create user now (only on success)
+    // Ensure user exists (or create)
     const existing = await db.collection("users").findOne({
-      $or: [{ email: (sIntent as any).email }, { phone: (sIntent as any).phone }],
+      $or: [
+        { email: (sIntent as any).email },
+        { phone: (sIntent as any).phone },
+      ],
     });
+    let userId: ObjectId;
     if (existing) {
-      // Edge case: if user already created (shouldn't happen), just link
-      await db.collection("signup_intents").updateOne(
-        { _id: (sIntent as any)._id },
-        { $set: { status: "completed", userId: (existing as any)._id, updatedAt: new Date() } }
-      );
-      await db.collection("payment_intents").updateOne(
-        { _id: new ObjectId(intentId) },
-        { $set: { status: "paid", updatedAt: new Date(), razorpay_order_id, razorpay_payment_id, razorpay_signature } }
-      );
-      const token = generateToken((existing as any)._id.toString());
-      res.json({
-        success: true,
-        token,
-        user: { id: (existing as any)._id, name: (existing as any).name, email: (existing as any).email, phone: (existing as any).phone },
+      userId = (existing as any)._id;
+    } else {
+      const userIns = await db.collection("users").insertOne({
+        name: (sIntent as any).name,
+        email: (sIntent as any).email,
+        phone: (sIntent as any).phone,
+        password: (sIntent as any).passwordHash,
+        role: "customer",
+        createdAt: new Date(),
+        updatedAt: new Date(),
       });
-      return;
+      userId = userIns.insertedId;
     }
 
-    const userIns = await db.collection("users").insertOne({
-      name: (sIntent as any).name,
-      email: (sIntent as any).email,
-      phone: (sIntent as any).phone,
-      password: (sIntent as any).passwordHash,
-      role: "customer",
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+    // Determine purchased SKU
+    const sProduct = await db
+      .collection("products")
+      .findOne({ _id: (sIntent as any).productId });
+    const sProductKey = (sProduct as any)?.key as string | undefined;
 
-    // Create/activate product mapping
-    if ((sIntent as any).productId) {
+    if (sProductKey === BUNDLE_SKU_KEY) {
+      // ► Grant ALL bundle components
+      const componentKeys = Array.from(await getBundleComponentsSet());
+      const bundleProducts = await db
+        .collection("products")
+        .find({ key: { $in: componentKeys }, isActive: true })
+        .toArray();
+
+      for (const bp of bundleProducts) {
+        await db.collection("user_products").updateOne(
+          { userId, productId: (bp as any)._id, variantId: null },
+          {
+            $setOnInsert: {
+              startedAt: new Date(),
+              meta: { source: "payment_bundle", interval: "monthly" },
+            },
+            $set: {
+              status: "active",
+              endsAt: null,
+              lastPaymentAt: new Date(),
+              paymentMeta: {
+                provider: "razorpay",
+                orderId: razorpay_order_id,
+                paymentId: razorpay_payment_id,
+                amount: (pIntent as any).amount,
+                currency: (pIntent as any).currency,
+              },
+            },
+          },
+          { upsert: true }
+        );
+      }
+    } else if (sProductKey === ALGO_SKU_KEY) {
+      // ► Grant ALGO (+ broker config if present)
       await db.collection("user_products").updateOne(
         {
-          userId: userIns.insertedId,
+          userId,
           productId: (sIntent as any).productId,
           variantId: (sIntent as any).variantId || null,
         },
@@ -238,11 +342,9 @@ export const verifyPayment: RequestHandler = async (req: Request, res: Response)
         { upsert: true }
       );
 
-      // Broker config if ALGO with brokerConfig present
-      const product = await db.collection("products").findOne({ _id: (sIntent as any).productId });
-      if ((product as any)?.key === "algo_simulator" && (sIntent as any).variantId && (sIntent as any).brokerConfig) {
+      if ((sIntent as any).variantId && (sIntent as any).brokerConfig) {
         await db.collection("broker_configs").insertOne({
-          userId: userIns.insertedId,
+          userId,
           productId: (sIntent as any).productId,
           variantId: (sIntent as any).variantId,
           brokerName: (sIntent as any).brokerConfig?.brokerName,
@@ -251,23 +353,70 @@ export const verifyPayment: RequestHandler = async (req: Request, res: Response)
           ...((sIntent as any).brokerConfig || {}),
         });
       }
+    } else if (sProductKey === JOURNALING_SOLO_SKU_KEY) {
+      // ► Grant Journaling (Solo)
+      await db.collection("user_products").updateOne(
+        {
+          userId,
+          productId: (sIntent as any).productId,
+          variantId: null,
+        },
+        {
+          $setOnInsert: {
+            startedAt: new Date(),
+            meta: { source: "payment", interval: "monthly" },
+          },
+          $set: {
+            status: "active",
+            endsAt: null,
+            lastPaymentAt: new Date(),
+            paymentMeta: {
+              provider: "razorpay",
+              orderId: razorpay_order_id,
+              paymentId: razorpay_payment_id,
+              amount: (pIntent as any).amount,
+              currency: (pIntent as any).currency,
+            },
+          },
+        },
+        { upsert: true }
+      );
+    } else {
+      res.status(400).json({ message: "This product is not purchasable" });
+      return;
     }
 
-    // Mark both intents
-    await db.collection("signup_intents").updateOne(
-      { _id: (sIntent as any)._id },
-      { $set: { status: "completed", userId: userIns.insertedId, updatedAt: new Date() } }
-    );
+    // Mark intents as completed / paid
+    await db
+      .collection("signup_intents")
+      .updateOne(
+        { _id: (sIntent as any)._id },
+        { $set: { status: "completed", userId, updatedAt: new Date() } }
+      );
     await db.collection("payment_intents").updateOne(
       { _id: new ObjectId(intentId) },
-      { $set: { status: "paid", updatedAt: new Date(), razorpay_order_id, razorpay_payment_id, razorpay_signature } }
+      {
+        $set: {
+          status: "paid",
+          updatedAt: new Date(),
+          razorpay_order_id,
+          razorpay_payment_id,
+          razorpay_signature,
+        },
+      }
     );
 
-    const token = generateToken(userIns.insertedId.toString());
+    const token = generateToken(userId.toString());
+    const u = await db.collection("users").findOne({ _id: userId });
     res.json({
       success: true,
       token,
-      user: { id: userIns.insertedId, name: (sIntent as any).name, email: (sIntent as any).email, phone: (sIntent as any).phone },
+      user: {
+        id: userId,
+        name: (u as any).name,
+        email: (u as any).email,
+        phone: (u as any).phone,
+      },
     });
   } catch (err) {
     console.error("verifyPayment error:", err);

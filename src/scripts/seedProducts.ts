@@ -1,15 +1,14 @@
+// server/src/seedProducts.ts
 import path from 'path';
 import dotenv from 'dotenv';
 import { MongoClient, ObjectId } from 'mongodb';
 
-// Load .env explicitly from project root (adjust if your layout differs)
 const envPath = path.resolve(__dirname, '../../.env');
 dotenv.config({ path: envPath });
 
 (async () => {
-  const uri = process.env.MONGO_URI;          // matches your .env
-  const dbName = process.env.MONGO_DB_NAME;   // matches your .env
-
+  const uri = process.env.MONGO_URI;
+  const dbName = process.env.MONGO_DB_NAME;
   if (!uri || !dbName) {
     console.error('Loaded .env from:', envPath);
     console.error('MONGO_URI =', process.env.MONGO_URI);
@@ -30,14 +29,48 @@ dotenv.config({ path: envPath });
     const delVariants = await db.collection('product_variants').deleteMany({});
     console.log(`🧹 Cleared products: ${delProducts.deletedCount}, variants: ${delVariants.deletedCount}`);
 
-    // ----- Insert 6 product families -----
+    // ===== Purchasable SKUs =====
+    // 1) essentials_bundle — forSale: true, contains 5 non-sale components
+    // 2) algo_simulator — forSale: true, 3 variants below
+    // 3) journaling_solo — forSale: true (NEW ✅), ₹999 / month
     const products = [
-      { key: 'technical_scanner',   name: 'Technical Scanner',   isActive: true, hasVariants: false, route: '/technical' },
-      { key: 'fundamental_scanner', name: 'Fundamental Scanner', isActive: true, hasVariants: false, route: '/fundamental' },
-      { key: 'algo_simulator',      name: 'ALGO Simulator',      isActive: true, hasVariants: true,  route: '/algo' },
-      { key: 'fno_khazana',         name: 'FNO Khazana',         isActive: true, hasVariants: false, route: '/fno' },
-      { key: 'journaling',          name: 'Journaling',          isActive: true, hasVariants: false, route: '/journal' },
-      { key: 'fii_dii_data',        name: 'FIIs/DIIs Data',      isActive: true, hasVariants: false, route: '/fii-dii' },
+      {
+        key: 'essentials_bundle',
+        name: "Trader's Essential Bundle (5-in-1)",
+        isActive: true,
+        hasVariants: false,
+        forSale: true,
+        route: '/bundle',
+        priceMonthly: 4999, // store price in DB
+        components: [
+          'technical_scanner',
+          'fundamental_scanner',
+          'fno_khazana',
+          'journaling',          // stays as bundle component
+          'fii_dii_data',
+        ],
+      },
+
+      // --- Non-sale component products (not purchasable individually) ---
+      { key: 'technical_scanner',   name: 'Technical Scanner',   isActive: true, hasVariants: false, forSale: false, route: '/technical' },
+      { key: 'fundamental_scanner', name: 'Fundamental Scanner', isActive: true, hasVariants: false, forSale: false, route: '/fundamental' },
+      { key: 'fno_khazana',         name: 'FNO Khazana',         isActive: true, hasVariants: false, forSale: false, route: '/fno' },
+      { key: 'journaling',          name: 'Journaling',          isActive: true, hasVariants: false, forSale: false, route: '/journal' },
+      { key: 'fii_dii_data',        name: 'FIIs/DIIs Data',      isActive: true, hasVariants: false, forSale: false, route: '/fii-dii' },
+
+      // --- Purchasable ALGO product (variants below) ---
+      { key: 'algo_simulator',      name: 'ALGO Simulator',      isActive: true, hasVariants: true,  forSale: true,  route: '/algo' },
+
+      // --- NEW: Journaling (Solo) purchasable SKU ---
+      {
+        key: 'journaling_solo',
+        name: 'Journaling (Solo)',
+        isActive: true,
+        hasVariants: false,
+        forSale: true,              // visible in /products
+        route: '/journal',
+        priceMonthly: 999,          // ✅ ₹999 / month
+      },
     ];
 
     const insertRes = await db.collection('products').insertMany(products);
@@ -45,7 +78,7 @@ dotenv.config({ path: envPath });
 
     const productsCount = await db.collection('products').countDocuments();
     console.log(`🔍 products count now: ${productsCount}`);
-    if (productsCount < 6) throw new Error('❌ Expected 6 products after insert');
+    if (productsCount < 8) throw new Error('❌ Expected 8 products (bundle + algo + journaling_solo + 5 components)');
 
     // Get the ALGO Simulator _id
     const algo = await db.collection('products').findOne({ key: 'algo_simulator' });
@@ -53,6 +86,15 @@ dotenv.config({ path: envPath });
 
     // ----- Insert ALGO variants (monthly only) -----
     const variants = [
+      {
+        productId: new ObjectId(algo._id),
+        key: 'starter',
+        name: 'Starter Scalping',
+        description: 'Beginner-friendly scalping suite',
+        priceMonthly: 5999,
+        interval: 'monthly',
+        isActive: true,
+      },
       {
         productId: new ObjectId(algo._id),
         key: 'pro',
@@ -67,23 +109,13 @@ dotenv.config({ path: envPath });
         key: 'swing',
         name: 'Swing Trader Master',
         description: 'Swing trading strategy system',
-        priceMonthly: 99999,
-        interval: 'monthly',
-        isActive: true,
-      },
-      {
-        productId: new ObjectId(algo._id),
-        key: 'starter',
-        name: 'Starter Scalping',
-        description: 'Beginner-friendly scalping suite',
-        priceMonthly: 5999,
+        priceMonthly: 9999,
         interval: 'monthly',
         isActive: true,
       },
     ];
 
-    const varRes = await db.collection('product_variants').insertMany(variants);
-    console.log(`🧩 Inserted variants: ${Object.keys(varRes.insertedIds).length}`);
+    await db.collection('product_variants').insertMany(variants);
 
     const variantsCount = await db.collection('product_variants').countDocuments({ productId: algo._id });
     console.log(`🔍 product_variants for ALGO count now: ${variantsCount}`);
@@ -92,12 +124,12 @@ dotenv.config({ path: envPath });
     // ----- Helpful indexes -----
     await db.collection('users').createIndex({ email: 1 }, { unique: true });
     await db.collection('products').createIndex({ key: 1 }, { unique: true });
+    await db.collection('products').createIndex({ forSale: 1, isActive: 1 });
     await db.collection('product_variants').createIndex({ productId: 1, key: 1 }, { unique: true });
     await db.collection('user_products').createIndex({ userId: 1, productId: 1, variantId: 1 }, { unique: true });
     await db.collection('broker_configs').createIndex({ userId: 1, productId: 1, variantId: 1 }, { unique: true });
 
     console.log('🔧 Indexes ensured (users, products, product_variants, user_products, broker_configs).');
-
     console.log('✅ Seed complete.');
   } catch (err) {
     console.error('❌ Seeding failed:', err);
