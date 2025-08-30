@@ -44,6 +44,8 @@ import instrumentRouter from "./routes/instruments"; // Path as needed
 import registerTradeJournalRoutes from "./routes/tradeJournal.routes";
 
 import registerContactRoutes from "./api/contact";
+import { setUserDatabase } from "./controllers/user.controller";
+import userRoutes from "./routes/user.routes";
 
 
 dotenv.config();
@@ -176,6 +178,7 @@ const connectDB = async () => {
 
     registerContactRoutes(app, db);
     setPaymentDatabase(db);
+    setUserDatabase(db);
 
     // mount specific routers first
     app.use("/api/auth", authRoutes);
@@ -188,6 +191,7 @@ const connectDB = async () => {
     app.use("/api/instruments", instrumentRouter);
     app.use("/api", registerTradeJournalRoutes(db));
     app.use('/api/daily-journal', registerDailyJournalRoutes(db));
+    app.use("/api/users", userRoutes);
 
 
     

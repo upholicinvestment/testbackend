@@ -69,7 +69,7 @@ dotenv.config({ path: envPath });
         hasVariants: false,
         forSale: true,              // visible in /products
         route: '/journal',
-        priceMonthly: 9999,          // ✅ ₹999 / month
+        priceMonthly: 299,          // ✅ ₹999 / month
       },
     ];
 
