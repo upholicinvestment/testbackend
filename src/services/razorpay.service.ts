@@ -1,4 +1,3 @@
-// server/src/services/razorpay.service.ts
 import Razorpay from "razorpay";
 
 export const razorpay = new Razorpay({

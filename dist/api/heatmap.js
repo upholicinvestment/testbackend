@@ -1,0 +1,969 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Heatmap = Heatmap;
+function Heatmap(app, db) {
+    // Keep your static securities list here (or move to a service/constants file)
+    const securities = [
+        {
+            name: "360ONE JUL FUT",
+            security_id: 53003,
+            sector: "Financial Services",
+        },
+        { name: "AMBER JUL FUT", security_id: 53027, sector: "Chemicals" },
+        { name: "AARTIIND JUL FUT", security_id: 53218, sector: "Chemicals" },
+        { name: "ABB JUL FUT", security_id: 53219, sector: "Capital Goods" },
+        {
+            name: "ABCAPITAL JUL FUT",
+            security_id: 53220,
+            sector: "Financial Services",
+        },
+        {
+            name: "ABFRL JUL FUT",
+            security_id: 53221,
+            sector: "Consumer Discretionary",
+        },
+        { name: "ACC JUL FUT", security_id: 53222, sector: "Cement" },
+        { name: "ADANIENSOL JUL FUT", security_id: 53223, sector: "Utilities" },
+        { name: "ADANIENT JUL FUT", security_id: 53224, sector: "Conglomerate" },
+        { name: "ADANIGREEN JUL FUT", security_id: 53225, sector: "Utilities" },
+        { name: "ADANIPORTS JUL FUT", security_id: 53226, sector: "Logistics" },
+        { name: "ALKEM JUL FUT", security_id: 53227, sector: "Pharmaceuticals" },
+        { name: "AMBUJACEM JUL FUT", security_id: 53235, sector: "Cement" },
+        {
+            name: "ANGELONE JUL FUT",
+            security_id: 53236,
+            sector: "Financial Services",
+        },
+        { name: "APLAPOLLO JUL FUT", security_id: 53240, sector: "Metals" },
+        { name: "APOLLOHOSP JUL FUT", security_id: 53241, sector: "Healthcare" },
+        { name: "ASHOKLEY JUL FUT", security_id: 53244, sector: "Automotive" },
+        { name: "ASIANPAINT JUL FUT", security_id: 53245, sector: "Paints" },
+        { name: "ASTRAL JUL FUT", security_id: 53246, sector: "Industrials" },
+        { name: "ATGL JUL FUT", security_id: 53247, sector: "Utilities" },
+        { name: "AUBANK JUL FUT", security_id: 53248, sector: "Banking" },
+        {
+            name: "AUROPHARMA JUL FUT",
+            security_id: 53249,
+            sector: "Pharmaceuticals",
+        },
+        { name: "AXISBANK JUL FUT", security_id: 53250, sector: "Banking" },
+        { name: "BAJAJ-AUTO JUL FUT", security_id: 53251, sector: "Automotive" },
+        {
+            name: "BAJAJFINSV JUL FUT",
+            security_id: 53252,
+            sector: "Financial Services",
+        },
+        {
+            name: "BAJFINANCE JUL FUT",
+            security_id: 53253,
+            sector: "Financial Services",
+        },
+        { name: "BALKRISIND JUL FUT", security_id: 53254, sector: "Automotive" },
+        { name: "BANDHANBNK JUL FUT", security_id: 53255, sector: "Banking" },
+        { name: "BANKBARODA JUL FUT", security_id: 53256, sector: "Banking" },
+        { name: "BANKINDIA JUL FUT", security_id: 53257, sector: "Banking" },
+        { name: "BEL JUL FUT", security_id: 53258, sector: "Defence" },
+        { name: "BHARATFORG JUL FUT", security_id: 53259, sector: "Automotive" },
+        { name: "BHARTIARTL JUL FUT", security_id: 53260, sector: "Telecom" },
+        { name: "BHEL JUL FUT", security_id: 53261, sector: "Capital Goods" },
+        { name: "BIOCON JUL FUT", security_id: 53262, sector: "Pharmaceuticals" },
+        { name: "BOSCHLTD JUL FUT", security_id: 53263, sector: "Automotive" },
+        { name: "BPCL JUL FUT", security_id: 53264, sector: "Oil & Gas" },
+        { name: "BRITANNIA JUL FUT", security_id: 53265, sector: "FMCG" },
+        { name: "BSE JUL FUT", security_id: 53268, sector: "Financial Services" },
+        { name: "BSOFT JUL FUT", security_id: 53269, sector: "IT" },
+        {
+            name: "CAMS JUL FUT",
+            security_id: 53270,
+            sector: "Financial Services",
+        },
+        { name: "CANBK JUL FUT", security_id: 53273, sector: "Banking" },
+        {
+            name: "CDSL JUL FUT",
+            security_id: 53274,
+            sector: "Financial Services",
+        },
+        { name: "CESC JUL FUT", security_id: 53275, sector: "Utilities" },
+        { name: "CGPOWER JUL FUT", security_id: 53276, sector: "Capital Goods" },
+        { name: "CHAMBLFERT JUL FUT", security_id: 53277, sector: "Fertilizers" },
+        {
+            name: "CHOLAFIN JUL FUT",
+            security_id: 53278,
+            sector: "Financial Services",
+        },
+        { name: "CIPLA JUL FUT", security_id: 53279, sector: "Pharmaceuticals" },
+        { name: "COALINDIA JUL FUT", security_id: 53280, sector: "Metals" },
+        { name: "COFORGE JUL FUT", security_id: 53281, sector: "IT" },
+        { name: "COLPAL JUL FUT", security_id: 53284, sector: "FMCG" },
+        { name: "CONCOR JUL FUT", security_id: 53286, sector: "Logistics" },
+        {
+            name: "CROMPTON JUL FUT",
+            security_id: 53289,
+            sector: "Consumer Durables",
+        },
+        {
+            name: "CUMMINSIND JUL FUT",
+            security_id: 53290,
+            sector: "Capital Goods",
+        },
+        { name: "CYIENT JUL FUT", security_id: 53291, sector: "IT" },
+        { name: "DABUR JUL FUT", security_id: 53292, sector: "FMCG" },
+        { name: "DALBHARAT JUL FUT", security_id: 53293, sector: "Cement" },
+        { name: "DELHIVERY JUL FUT", security_id: 53294, sector: "Logistics" },
+        {
+            name: "DIVISLAB JUL FUT",
+            security_id: 53295,
+            sector: "Pharmaceuticals",
+        },
+        {
+            name: "DIXON JUL FUT",
+            security_id: 53296,
+            sector: "Consumer Durables",
+        },
+        { name: "DLF JUL FUT", security_id: 53297, sector: "Real Estate" },
+        { name: "DMART JUL FUT", security_id: 53298, sector: "Retail" },
+        {
+            name: "DRREDDY JUL FUT",
+            security_id: 53299,
+            sector: "Pharmaceuticals",
+        },
+        { name: "EICHERMOT JUL FUT", security_id: 53300, sector: "Automotive" },
+        { name: "ETERNAL JUL FUT", security_id: 53302, sector: "Healthcare" },
+        { name: "EXIDEIND JUL FUT", security_id: 53303, sector: "Automotive" },
+        { name: "FEDERALBNK JUL FUT", security_id: 53304, sector: "Banking" },
+        { name: "GAIL JUL FUT", security_id: 53305, sector: "Oil & Gas" },
+        {
+            name: "GLENMARK JUL FUT",
+            security_id: 53306,
+            sector: "Pharmaceuticals",
+        },
+        { name: "GMRAIRPORT JUL FUT", security_id: 53307, sector: "Logistics" },
+        { name: "GODREJCP JUL FUT", security_id: 53308, sector: "FMCG" },
+        { name: "GODREJPROP JUL FUT", security_id: 53309, sector: "Real Estate" },
+        {
+            name: "GRANULES JUL FUT",
+            security_id: 53310,
+            sector: "Pharmaceuticals",
+        },
+        { name: "GRASIM JUL FUT", security_id: 53311, sector: "Cement" },
+        { name: "HAL JUL FUT", security_id: 53312, sector: "Defence" },
+        {
+            name: "HAVELLS JUL FUT",
+            security_id: 53313,
+            sector: "Consumer Durables",
+        },
+        { name: "HCLTECH JUL FUT", security_id: 53314, sector: "IT" },
+        {
+            name: "HDFCAMC JUL FUT",
+            security_id: 53315,
+            sector: "Financial Services",
+        },
+        { name: "HDFCBANK JUL FUT", security_id: 53316, sector: "Banking" },
+        { name: "HDFCLIFE JUL FUT", security_id: 53317, sector: "Insurance" },
+        { name: "HEROMOTOCO JUL FUT", security_id: 53318, sector: "Automotive" },
+        { name: "HFCL JUL FUT", security_id: 53319, sector: "Telecom" },
+        { name: "HINDALCO JUL FUT", security_id: 53321, sector: "Metals" },
+        { name: "HINDCOPPER JUL FUT", security_id: 53322, sector: "Metals" },
+        { name: "HINDPETRO JUL FUT", security_id: 53323, sector: "Oil & Gas" },
+        { name: "HINDUNILVR JUL FUT", security_id: 53324, sector: "FMCG" },
+        { name: "HINDZINC JUL FUT", security_id: 53325, sector: "Metals" },
+        {
+            name: "HUDCO JUL FUT",
+            security_id: 53326,
+            sector: "Financial Services",
+        },
+        { name: "ICICIBANK JUL FUT", security_id: 53327, sector: "Banking" },
+        { name: "ICICIGI JUL FUT", security_id: 53328, sector: "Insurance" },
+        { name: "ICICIPRULI JUL FUT", security_id: 53329, sector: "Insurance" },
+        { name: "IDEA JUL FUT", security_id: 53330, sector: "Telecom" },
+        { name: "IDFCFIRSTB JUL FUT", security_id: 53334, sector: "Banking" },
+        { name: "IEX JUL FUT", security_id: 53335, sector: "Utilities" },
+        { name: "IGL JUL FUT", security_id: 53336, sector: "Oil & Gas" },
+        {
+            name: "IIFL JUL FUT",
+            security_id: 53337,
+            sector: "Financial Services",
+        },
+        { name: "INDHOTEL JUL FUT", security_id: 53338, sector: "Hospitality" },
+        { name: "INDIANB JUL FUT", security_id: 53339, sector: "Banking" },
+        { name: "INDIGO JUL FUT", security_id: 53340, sector: "Aviation" },
+        { name: "INDUSINDBK JUL FUT", security_id: 53341, sector: "Banking" },
+        { name: "INDUSTOWER JUL FUT", security_id: 53342, sector: "Telecom" },
+        { name: "INFY JUL FUT", security_id: 53343, sector: "IT" },
+        { name: "INOXWIND JUL FUT", security_id: 53344, sector: "Capital Goods" },
+        { name: "IOC JUL FUT", security_id: 53345, sector: "Oil & Gas" },
+        { name: "IRB JUL FUT", security_id: 53346, sector: "Infrastructure" },
+        { name: "IRCTC JUL FUT", security_id: 53347, sector: "Tourism" },
+        {
+            name: "IREDA JUL FUT",
+            security_id: 53348,
+            sector: "Financial Services",
+        },
+        {
+            name: "IRFC JUL FUT",
+            security_id: 53351,
+            sector: "Financial Services",
+        },
+        { name: "ITC JUL FUT", security_id: 53352, sector: "FMCG" },
+        { name: "JINDALSTEL JUL FUT", security_id: 53353, sector: "Metals" },
+        {
+            name: "JIOFIN JUL FUT",
+            security_id: 53354,
+            sector: "Financial Services",
+        },
+        { name: "JSL JUL FUT", security_id: 53355, sector: "Metals" },
+        { name: "JSWENERGY JUL FUT", security_id: 53358, sector: "Utilities" },
+        { name: "JSWSTEEL JUL FUT", security_id: 53359, sector: "Metals" },
+        {
+            name: "JUBLFOOD JUL FUT",
+            security_id: 53366,
+            sector: "Quick Service Restaurant",
+        },
+        { name: "KALYANKJIL JUL FUT", security_id: 53367, sector: "Retail" },
+        { name: "KEI JUL FUT", security_id: 53368, sector: "Capital Goods" },
+        { name: "KOTAKBANK JUL FUT", security_id: 53369, sector: "Banking" },
+        { name: "KPITTECH JUL FUT", security_id: 53370, sector: "IT" },
+        {
+            name: "LAURUSLABS JUL FUT",
+            security_id: 53371,
+            sector: "Pharmaceuticals",
+        },
+        {
+            name: "LICHSGFIN JUL FUT",
+            security_id: 53372,
+            sector: "Financial Services",
+        },
+        { name: "LICI JUL FUT", security_id: 53373, sector: "Insurance" },
+        { name: "LODHA JUL FUT", security_id: 53374, sector: "Real Estate" },
+        { name: "LT JUL FUT", security_id: 53375, sector: "Infrastructure" },
+        { name: "LTF JUL FUT", security_id: 53376, sector: "Financial Services" },
+        { name: "LTIM JUL FUT", security_id: 53377, sector: "IT" },
+        { name: "LUPIN JUL FUT", security_id: 53378, sector: "Pharmaceuticals" },
+        { name: "M&M JUL FUT", security_id: 53379, sector: "Automotive" },
+        {
+            name: "M&MFIN JUL FUT",
+            security_id: 53380,
+            sector: "Financial Services",
+        },
+        {
+            name: "MANAPPURAM JUL FUT",
+            security_id: 53381,
+            sector: "Financial Services",
+        },
+        { name: "MARICO JUL FUT", security_id: 53382, sector: "FMCG" },
+        { name: "MARUTI JUL FUT", security_id: 53383, sector: "Automotive" },
+        { name: "MAXHEALTH JUL FUT", security_id: 53384, sector: "Healthcare" },
+        { name: "MCX JUL FUT", security_id: 53385, sector: "Financial Services" },
+        { name: "MFSL JUL FUT", security_id: 53386, sector: "Insurance" },
+        { name: "MGL JUL FUT", security_id: 53387, sector: "Oil & Gas" },
+        { name: "MOTHERSON JUL FUT", security_id: 53388, sector: "Automotive" },
+        { name: "MPHASIS JUL FUT", security_id: 53389, sector: "IT" },
+        {
+            name: "MUTHOOTFIN JUL FUT",
+            security_id: 53390,
+            sector: "Financial Services",
+        },
+        { name: "NATIONALUM JUL FUT", security_id: 53391, sector: "Metals" },
+        { name: "NAUKRI JUL FUT", security_id: 53392, sector: "IT" },
+        { name: "NBCC JUL FUT", security_id: 53393, sector: "Construction" },
+        { name: "NCC JUL FUT", security_id: 53394, sector: "Construction" },
+        { name: "NESTLEIND JUL FUT", security_id: 53395, sector: "FMCG" },
+        { name: "NHPC JUL FUT", security_id: 53396, sector: "Utilities" },
+        { name: "NMDC JUL FUT", security_id: 53397, sector: "Metals" },
+        { name: "NTPC JUL FUT", security_id: 53398, sector: "Utilities" },
+        { name: "NYKAA JUL FUT", security_id: 53399, sector: "Retail" },
+        { name: "OBEROIRLTY JUL FUT", security_id: 53402, sector: "Real Estate" },
+        { name: "OFSS JUL FUT", security_id: 53403, sector: "IT" },
+        { name: "OIL JUL FUT", security_id: 53404, sector: "Oil & Gas" },
+        { name: "ONGC JUL FUT", security_id: 53405, sector: "Oil & Gas" },
+        { name: "PAGEIND JUL FUT", security_id: 53406, sector: "Textiles" },
+        { name: "PATANJALI JUL FUT", security_id: 53407, sector: "FMCG" },
+        { name: "PAYTM JUL FUT", security_id: 53408, sector: "IT" },
+        { name: "PEL JUL FUT", security_id: 53409, sector: "Financial Services" },
+        { name: "PERSISTENT JUL FUT", security_id: 53413, sector: "IT" },
+        { name: "PETRONET JUL FUT", security_id: 53414, sector: "Oil & Gas" },
+        { name: "PFC JUL FUT", security_id: 53415, sector: "Financial Services" },
+        { name: "PHOENIXLTD JUL FUT", security_id: 53416, sector: "Real Estate" },
+        { name: "PIDILITIND JUL FUT", security_id: 53418, sector: "Chemicals" },
+        { name: "PIIND JUL FUT", security_id: 53419, sector: "Chemicals" },
+        { name: "PNB JUL FUT", security_id: 53420, sector: "Banking" },
+        {
+            name: "PNBHOUSING JUL FUT",
+            security_id: 53421,
+            sector: "Financial Services",
+        },
+        { name: "POLICYBZR JUL FUT", security_id: 53422, sector: "IT" },
+        { name: "POLYCAB JUL FUT", security_id: 53423, sector: "Capital Goods" },
+        {
+            name: "POONAWALLA JUL FUT",
+            security_id: 53424,
+            sector: "Financial Services",
+        },
+        { name: "POWERGRID JUL FUT", security_id: 53425, sector: "Utilities" },
+        { name: "PRESTIGE JUL FUT", security_id: 53426, sector: "Real Estate" },
+        { name: "RBLBANK JUL FUT", security_id: 53427, sector: "Banking" },
+        {
+            name: "RECLTD JUL FUT",
+            security_id: 53428,
+            sector: "Financial Services",
+        },
+        { name: "RELIANCE JUL FUT", security_id: 53429, sector: "Conglomerate" },
+        { name: "SAIL JUL FUT", security_id: 53430, sector: "Metals" },
+        {
+            name: "SBICARD JUL FUT",
+            security_id: 53431,
+            sector: "Financial Services",
+        },
+        { name: "SBILIFE JUL FUT", security_id: 53432, sector: "Insurance" },
+        { name: "SBIN JUL FUT", security_id: 53433, sector: "Banking" },
+        { name: "SHREECEM JUL FUT", security_id: 53434, sector: "Cement" },
+        {
+            name: "SHRIRAMFIN JUL FUT",
+            security_id: 53435,
+            sector: "Financial Services",
+        },
+        { name: "SIEMENS JUL FUT", security_id: 53436, sector: "Capital Goods" },
+        { name: "SJVN JUL FUT", security_id: 53437, sector: "Utilities" },
+        { name: "SOLARINDS JUL FUT", security_id: 53438, sector: "Chemicals" },
+        { name: "SONACOMS JUL FUT", security_id: 53439, sector: "Automotive" },
+        { name: "SRF JUL FUT", security_id: 53440, sector: "Chemicals" },
+        {
+            name: "SUNPHARMA JUL FUT",
+            security_id: 53441,
+            sector: "Pharmaceuticals",
+        },
+        {
+            name: "SUPREMEIND JUL FUT",
+            security_id: 53442,
+            sector: "Consumer Durables",
+        },
+        {
+            name: "SYNGENE JUL FUT",
+            security_id: 53443,
+            sector: "Pharmaceuticals",
+        },
+        { name: "TATACHEM JUL FUT", security_id: 53448, sector: "Chemicals" },
+        { name: "TATACOMM JUL FUT", security_id: 53449, sector: "Telecom" },
+        { name: "TATACONSUM JUL FUT", security_id: 53450, sector: "FMCG" },
+        { name: "TATAELXSI JUL FUT", security_id: 53451, sector: "IT" },
+        { name: "TATAMOTORS JUL FUT", security_id: 53452, sector: "Automotive" },
+        { name: "TATAPOWER JUL FUT", security_id: 53453, sector: "Utilities" },
+        { name: "TATASTEEL JUL FUT", security_id: 53454, sector: "Metals" },
+        { name: "TATATECH JUL FUT", security_id: 53455, sector: "IT" },
+        { name: "TCS JUL FUT", security_id: 53460, sector: "IT" },
+        { name: "TECHM JUL FUT", security_id: 53461, sector: "IT" },
+        { name: "TIINDIA JUL FUT", security_id: 53464, sector: "Automotive" },
+        { name: "TITAGARH JUL FUT", security_id: 53465, sector: "Capital Goods" },
+        {
+            name: "TITAN JUL FUT",
+            security_id: 53466,
+            sector: "Consumer Discretionary",
+        },
+        {
+            name: "TORNTPHARM JUL FUT",
+            security_id: 53467,
+            sector: "Pharmaceuticals",
+        },
+        { name: "TORNTPOWER JUL FUT", security_id: 53468, sector: "Utilities" },
+        { name: "TRENT JUL FUT", security_id: 53469, sector: "Retail" },
+        { name: "TVSMOTOR JUL FUT", security_id: 53470, sector: "Automotive" },
+        { name: "ULTRACEMCO JUL FUT", security_id: 53471, sector: "Cement" },
+        { name: "UNIONBANK JUL FUT", security_id: 53472, sector: "Banking" },
+        { name: "UNITDSPR JUL FUT", security_id: 53473, sector: "FMCG" },
+        { name: "UPL JUL FUT", security_id: 53474, sector: "Chemicals" },
+        { name: "VBL JUL FUT", security_id: 53475, sector: "FMCG" },
+        { name: "VEDL JUL FUT", security_id: 53478, sector: "Metals" },
+        {
+            name: "VOLTAS JUL FUT",
+            security_id: 53479,
+            sector: "Consumer Durables",
+        },
+        { name: "WIPRO JUL FUT", security_id: 53480, sector: "IT" },
+        { name: "YESBANK JUL FUT", security_id: 53481, sector: "Banking" },
+        {
+            name: "ZYDUSLIFE JUL FUT",
+            security_id: 53484,
+            sector: "Pharmaceuticals",
+        },
+        { name: "PGEL JUL FUT", security_id: 53763, sector: "Utilities" },
+        { name: "BDL JUL FUT", security_id: 64225, sector: "Defence" },
+        {
+            name: "BLUESTARCO JUL FUT",
+            security_id: 64233,
+            sector: "Consumer Durables",
+        },
+        { name: "FORTIS JUL FUT", security_id: 64412, sector: "Healthcare" },
+        { name: "KAYNES JUL FUT", security_id: 64624, sector: "IT" },
+        {
+            name: "MANKIND JUL FUT",
+            security_id: 64901,
+            sector: "Pharmaceuticals",
+        },
+        { name: "MAZDOCK JUL FUT", security_id: 64907, sector: "Defence" },
+        {
+            name: "PPLPHARMA JUL FUT",
+            security_id: 64988,
+            sector: "Pharmaceuticals",
+        },
+        { name: "RVNL JUL FUT", security_id: 64997, sector: "Infrastructure" },
+        { name: "UNOMINDA JUL FUT", security_id: 65239, sector: "Automotive" }
+    ];
+    app.get("/api/heatmap", async (_req, res) => {
+        try {
+            const collection = db.collection("nse_fno_stock");
+            const securityIdMap = new Map();
+            const securityIds = [];
+            securities.forEach((sec) => {
+                securityIdMap.set(sec.security_id, { name: sec.name, sector: sec.sector });
+                securityIds.push(sec.security_id);
+            });
+            const pipeline = [
+                { $match: { security_id: { $in: securityIds } } },
+                { $sort: { received_at: -1 } },
+                {
+                    $group: {
+                        _id: "$security_id",
+                        latestDoc: { $first: "$$ROOT" },
+                    },
+                },
+                { $replaceRoot: { newRoot: "$latestDoc" } },
+                {
+                    $project: {
+                        _id: 1,
+                        security_id: 1,
+                        LTP: 1,
+                        close: 1,
+                        received_at: 1,
+                    },
+                },
+            ];
+            const items = await collection.aggregate(pipeline).toArray();
+            const processedItems = items.map((item) => {
+                const securityId = Number(item.security_id);
+                const meta = securityIdMap.get(securityId);
+                const ltp = parseFloat(item.LTP ?? "0");
+                const close = parseFloat(item.close ?? "0");
+                const change = ltp && close && !isNaN(ltp) && !isNaN(close) && close !== 0
+                    ? ((ltp - close) / close) * 100
+                    : undefined;
+                return {
+                    _id: item._id?.toString() ?? "",
+                    trading_symbol: meta?.name ?? "",
+                    LTP: item.LTP ?? "",
+                    close: item.close ?? "",
+                    sector: meta?.sector ?? "Unknown",
+                    security_id: securityId,
+                    change,
+                };
+            });
+            res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=30");
+            res.setHeader("Vary", "Accept-Encoding");
+            res.json(processedItems);
+        }
+        catch (error) {
+            console.error("Error fetching heatmap data:", error);
+            res.status(500).json({
+                error: "Internal server error",
+                details: error instanceof Error ? error.message : "Unknown error",
+            });
+        }
+    });
+}
+// const securities = [
+//   {
+//     name: "360ONE JUL FUT",
+//     security_id: 53003,
+//     sector: "Financial Services",
+//   },
+//   { name: "AMBER JUL FUT", security_id: 53027, sector: "Chemicals" },
+//   { name: "AARTIIND JUL FUT", security_id: 53218, sector: "Chemicals" },
+//   { name: "ABB JUL FUT", security_id: 53219, sector: "Capital Goods" },
+//   {
+//     name: "ABCAPITAL JUL FUT",
+//     security_id: 53220,
+//     sector: "Financial Services",
+//   },
+//   {
+//     name: "ABFRL JUL FUT",
+//     security_id: 53221,
+//     sector: "Consumer Discretionary",
+//   },
+//   { name: "ACC JUL FUT", security_id: 53222, sector: "Cement" },
+//   { name: "ADANIENSOL JUL FUT", security_id: 53223, sector: "Utilities" },
+//   { name: "ADANIENT JUL FUT", security_id: 53224, sector: "Conglomerate" },
+//   { name: "ADANIGREEN JUL FUT", security_id: 53225, sector: "Utilities" },
+//   { name: "ADANIPORTS JUL FUT", security_id: 53226, sector: "Logistics" },
+//   { name: "ALKEM JUL FUT", security_id: 53227, sector: "Pharmaceuticals" },
+//   { name: "AMBUJACEM JUL FUT", security_id: 53235, sector: "Cement" },
+//   {
+//     name: "ANGELONE JUL FUT",
+//     security_id: 53236,
+//     sector: "Financial Services",
+//   },
+//   { name: "APLAPOLLO JUL FUT", security_id: 53240, sector: "Metals" },
+//   { name: "APOLLOHOSP JUL FUT", security_id: 53241, sector: "Healthcare" },
+//   { name: "ASHOKLEY JUL FUT", security_id: 53244, sector: "Automotive" },
+//   { name: "ASIANPAINT JUL FUT", security_id: 53245, sector: "Paints" },
+//   { name: "ASTRAL JUL FUT", security_id: 53246, sector: "Industrials" },
+//   { name: "ATGL JUL FUT", security_id: 53247, sector: "Utilities" },
+//   { name: "AUBANK JUL FUT", security_id: 53248, sector: "Banking" },
+//   {
+//     name: "AUROPHARMA JUL FUT",
+//     security_id: 53249,
+//     sector: "Pharmaceuticals",
+//   },
+//   { name: "AXISBANK JUL FUT", security_id: 53250, sector: "Banking" },
+//   { name: "BAJAJ-AUTO JUL FUT", security_id: 53251, sector: "Automotive" },
+//   {
+//     name: "BAJAJFINSV JUL FUT",
+//     security_id: 53252,
+//     sector: "Financial Services",
+//   },
+//   {
+//     name: "BAJFINANCE JUL FUT",
+//     security_id: 53253,
+//     sector: "Financial Services",
+//   },
+//   { name: "BALKRISIND JUL FUT", security_id: 53254, sector: "Automotive" },
+//   { name: "BANDHANBNK JUL FUT", security_id: 53255, sector: "Banking" },
+//   { name: "BANKBARODA JUL FUT", security_id: 53256, sector: "Banking" },
+//   { name: "BANKINDIA JUL FUT", security_id: 53257, sector: "Banking" },
+//   { name: "BEL JUL FUT", security_id: 53258, sector: "Defence" },
+//   { name: "BHARATFORG JUL FUT", security_id: 53259, sector: "Automotive" },
+//   { name: "BHARTIARTL JUL FUT", security_id: 53260, sector: "Telecom" },
+//   { name: "BHEL JUL FUT", security_id: 53261, sector: "Capital Goods" },
+//   { name: "BIOCON JUL FUT", security_id: 53262, sector: "Pharmaceuticals" },
+//   { name: "BOSCHLTD JUL FUT", security_id: 53263, sector: "Automotive" },
+//   { name: "BPCL JUL FUT", security_id: 53264, sector: "Oil & Gas" },
+//   { name: "BRITANNIA JUL FUT", security_id: 53265, sector: "FMCG" },
+//   { name: "BSE JUL FUT", security_id: 53268, sector: "Financial Services" },
+//   { name: "BSOFT JUL FUT", security_id: 53269, sector: "IT" },
+//   {
+//     name: "CAMS JUL FUT",
+//     security_id: 53270,
+//     sector: "Financial Services",
+//   },
+//   { name: "CANBK JUL FUT", security_id: 53273, sector: "Banking" },
+//   {
+//     name: "CDSL JUL FUT",
+//     security_id: 53274,
+//     sector: "Financial Services",
+//   },
+//   { name: "CESC JUL FUT", security_id: 53275, sector: "Utilities" },
+//   { name: "CGPOWER JUL FUT", security_id: 53276, sector: "Capital Goods" },
+//   { name: "CHAMBLFERT JUL FUT", security_id: 53277, sector: "Fertilizers" },
+//   {
+//     name: "CHOLAFIN JUL FUT",
+//     security_id: 53278,
+//     sector: "Financial Services",
+//   },
+//   { name: "CIPLA JUL FUT", security_id: 53279, sector: "Pharmaceuticals" },
+//   { name: "COALINDIA JUL FUT", security_id: 53280, sector: "Metals" },
+//   { name: "COFORGE JUL FUT", security_id: 53281, sector: "IT" },
+//   { name: "COLPAL JUL FUT", security_id: 53284, sector: "FMCG" },
+//   { name: "CONCOR JUL FUT", security_id: 53286, sector: "Logistics" },
+//   {
+//     name: "CROMPTON JUL FUT",
+//     security_id: 53289,
+//     sector: "Consumer Durables",
+//   },
+//   {
+//     name: "CUMMINSIND JUL FUT",
+//     security_id: 53290,
+//     sector: "Capital Goods",
+//   },
+//   { name: "CYIENT JUL FUT", security_id: 53291, sector: "IT" },
+//   { name: "DABUR JUL FUT", security_id: 53292, sector: "FMCG" },
+//   { name: "DALBHARAT JUL FUT", security_id: 53293, sector: "Cement" },
+//   { name: "DELHIVERY JUL FUT", security_id: 53294, sector: "Logistics" },
+//   {
+//     name: "DIVISLAB JUL FUT",
+//     security_id: 53295,
+//     sector: "Pharmaceuticals",
+//   },
+//   {
+//     name: "DIXON JUL FUT",
+//     security_id: 53296,
+//     sector: "Consumer Durables",
+//   },
+//   { name: "DLF JUL FUT", security_id: 53297, sector: "Real Estate" },
+//   { name: "DMART JUL FUT", security_id: 53298, sector: "Retail" },
+//   {
+//     name: "DRREDDY JUL FUT",
+//     security_id: 53299,
+//     sector: "Pharmaceuticals",
+//   },
+//   { name: "EICHERMOT JUL FUT", security_id: 53300, sector: "Automotive" },
+//   { name: "ETERNAL JUL FUT", security_id: 53302, sector: "Healthcare" },
+//   { name: "EXIDEIND JUL FUT", security_id: 53303, sector: "Automotive" },
+//   { name: "FEDERALBNK JUL FUT", security_id: 53304, sector: "Banking" },
+//   { name: "GAIL JUL FUT", security_id: 53305, sector: "Oil & Gas" },
+//   {
+//     name: "GLENMARK JUL FUT",
+//     security_id: 53306,
+//     sector: "Pharmaceuticals",
+//   },
+//   { name: "GMRAIRPORT JUL FUT", security_id: 53307, sector: "Logistics" },
+//   { name: "GODREJCP JUL FUT", security_id: 53308, sector: "FMCG" },
+//   { name: "GODREJPROP JUL FUT", security_id: 53309, sector: "Real Estate" },
+//   {
+//     name: "GRANULES JUL FUT",
+//     security_id: 53310,
+//     sector: "Pharmaceuticals",
+//   },
+//   { name: "GRASIM JUL FUT", security_id: 53311, sector: "Cement" },
+//   { name: "HAL JUL FUT", security_id: 53312, sector: "Defence" },
+//   {
+//     name: "HAVELLS JUL FUT",
+//     security_id: 53313,
+//     sector: "Consumer Durables",
+//   },
+//   { name: "HCLTECH JUL FUT", security_id: 53314, sector: "IT" },
+//   {
+//     name: "HDFCAMC JUL FUT",
+//     security_id: 53315,
+//     sector: "Financial Services",
+//   },
+//   { name: "HDFCBANK JUL FUT", security_id: 53316, sector: "Banking" },
+//   { name: "HDFCLIFE JUL FUT", security_id: 53317, sector: "Insurance" },
+//   { name: "HEROMOTOCO JUL FUT", security_id: 53318, sector: "Automotive" },
+//   { name: "HFCL JUL FUT", security_id: 53319, sector: "Telecom" },
+//   { name: "HINDALCO JUL FUT", security_id: 53321, sector: "Metals" },
+//   { name: "HINDCOPPER JUL FUT", security_id: 53322, sector: "Metals" },
+//   { name: "HINDPETRO JUL FUT", security_id: 53323, sector: "Oil & Gas" },
+//   { name: "HINDUNILVR JUL FUT", security_id: 53324, sector: "FMCG" },
+//   { name: "HINDZINC JUL FUT", security_id: 53325, sector: "Metals" },
+//   {
+//     name: "HUDCO JUL FUT",
+//     security_id: 53326,
+//     sector: "Financial Services",
+//   },
+//   { name: "ICICIBANK JUL FUT", security_id: 53327, sector: "Banking" },
+//   { name: "ICICIGI JUL FUT", security_id: 53328, sector: "Insurance" },
+//   { name: "ICICIPRULI JUL FUT", security_id: 53329, sector: "Insurance" },
+//   { name: "IDEA JUL FUT", security_id: 53330, sector: "Telecom" },
+//   { name: "IDFCFIRSTB JUL FUT", security_id: 53334, sector: "Banking" },
+//   { name: "IEX JUL FUT", security_id: 53335, sector: "Utilities" },
+//   { name: "IGL JUL FUT", security_id: 53336, sector: "Oil & Gas" },
+//   {
+//     name: "IIFL JUL FUT",
+//     security_id: 53337,
+//     sector: "Financial Services",
+//   },
+//   { name: "INDHOTEL JUL FUT", security_id: 53338, sector: "Hospitality" },
+//   { name: "INDIANB JUL FUT", security_id: 53339, sector: "Banking" },
+//   { name: "INDIGO JUL FUT", security_id: 53340, sector: "Aviation" },
+//   { name: "INDUSINDBK JUL FUT", security_id: 53341, sector: "Banking" },
+//   { name: "INDUSTOWER JUL FUT", security_id: 53342, sector: "Telecom" },
+//   { name: "INFY JUL FUT", security_id: 53343, sector: "IT" },
+//   { name: "INOXWIND JUL FUT", security_id: 53344, sector: "Capital Goods" },
+//   { name: "IOC JUL FUT", security_id: 53345, sector: "Oil & Gas" },
+//   { name: "IRB JUL FUT", security_id: 53346, sector: "Infrastructure" },
+//   { name: "IRCTC JUL FUT", security_id: 53347, sector: "Tourism" },
+//   {
+//     name: "IREDA JUL FUT",
+//     security_id: 53348,
+//     sector: "Financial Services",
+//   },
+//   {
+//     name: "IRFC JUL FUT",
+//     security_id: 53351,
+//     sector: "Financial Services",
+//   },
+//   { name: "ITC JUL FUT", security_id: 53352, sector: "FMCG" },
+//   { name: "JINDALSTEL JUL FUT", security_id: 53353, sector: "Metals" },
+//   {
+//     name: "JIOFIN JUL FUT",
+//     security_id: 53354,
+//     sector: "Financial Services",
+//   },
+//   { name: "JSL JUL FUT", security_id: 53355, sector: "Metals" },
+//   { name: "JSWENERGY JUL FUT", security_id: 53358, sector: "Utilities" },
+//   { name: "JSWSTEEL JUL FUT", security_id: 53359, sector: "Metals" },
+//   {
+//     name: "JUBLFOOD JUL FUT",
+//     security_id: 53366,
+//     sector: "Quick Service Restaurant",
+//   },
+//   { name: "KALYANKJIL JUL FUT", security_id: 53367, sector: "Retail" },
+//   { name: "KEI JUL FUT", security_id: 53368, sector: "Capital Goods" },
+//   { name: "KOTAKBANK JUL FUT", security_id: 53369, sector: "Banking" },
+//   { name: "KPITTECH JUL FUT", security_id: 53370, sector: "IT" },
+//   {
+//     name: "LAURUSLABS JUL FUT",
+//     security_id: 53371,
+//     sector: "Pharmaceuticals",
+//   },
+//   {
+//     name: "LICHSGFIN JUL FUT",
+//     security_id: 53372,
+//     sector: "Financial Services",
+//   },
+//   { name: "LICI JUL FUT", security_id: 53373, sector: "Insurance" },
+//   { name: "LODHA JUL FUT", security_id: 53374, sector: "Real Estate" },
+//   { name: "LT JUL FUT", security_id: 53375, sector: "Infrastructure" },
+//   { name: "LTF JUL FUT", security_id: 53376, sector: "Financial Services" },
+//   { name: "LTIM JUL FUT", security_id: 53377, sector: "IT" },
+//   { name: "LUPIN JUL FUT", security_id: 53378, sector: "Pharmaceuticals" },
+//   { name: "M&M JUL FUT", security_id: 53379, sector: "Automotive" },
+//   {
+//     name: "M&MFIN JUL FUT",
+//     security_id: 53380,
+//     sector: "Financial Services",
+//   },
+//   {
+//     name: "MANAPPURAM JUL FUT",
+//     security_id: 53381,
+//     sector: "Financial Services",
+//   },
+//   { name: "MARICO JUL FUT", security_id: 53382, sector: "FMCG" },
+//   { name: "MARUTI JUL FUT", security_id: 53383, sector: "Automotive" },
+//   { name: "MAXHEALTH JUL FUT", security_id: 53384, sector: "Healthcare" },
+//   { name: "MCX JUL FUT", security_id: 53385, sector: "Financial Services" },
+//   { name: "MFSL JUL FUT", security_id: 53386, sector: "Insurance" },
+//   { name: "MGL JUL FUT", security_id: 53387, sector: "Oil & Gas" },
+//   { name: "MOTHERSON JUL FUT", security_id: 53388, sector: "Automotive" },
+//   { name: "MPHASIS JUL FUT", security_id: 53389, sector: "IT" },
+//   {
+//     name: "MUTHOOTFIN JUL FUT",
+//     security_id: 53390,
+//     sector: "Financial Services",
+//   },
+//   { name: "NATIONALUM JUL FUT", security_id: 53391, sector: "Metals" },
+//   { name: "NAUKRI JUL FUT", security_id: 53392, sector: "IT" },
+//   { name: "NBCC JUL FUT", security_id: 53393, sector: "Construction" },
+//   { name: "NCC JUL FUT", security_id: 53394, sector: "Construction" },
+//   { name: "NESTLEIND JUL FUT", security_id: 53395, sector: "FMCG" },
+//   { name: "NHPC JUL FUT", security_id: 53396, sector: "Utilities" },
+//   { name: "NMDC JUL FUT", security_id: 53397, sector: "Metals" },
+//   { name: "NTPC JUL FUT", security_id: 53398, sector: "Utilities" },
+//   { name: "NYKAA JUL FUT", security_id: 53399, sector: "Retail" },
+//   { name: "OBEROIRLTY JUL FUT", security_id: 53402, sector: "Real Estate" },
+//   { name: "OFSS JUL FUT", security_id: 53403, sector: "IT" },
+//   { name: "OIL JUL FUT", security_id: 53404, sector: "Oil & Gas" },
+//   { name: "ONGC JUL FUT", security_id: 53405, sector: "Oil & Gas" },
+//   { name: "PAGEIND JUL FUT", security_id: 53406, sector: "Textiles" },
+//   { name: "PATANJALI JUL FUT", security_id: 53407, sector: "FMCG" },
+//   { name: "PAYTM JUL FUT", security_id: 53408, sector: "IT" },
+//   { name: "PEL JUL FUT", security_id: 53409, sector: "Financial Services" },
+//   { name: "PERSISTENT JUL FUT", security_id: 53413, sector: "IT" },
+//   { name: "PETRONET JUL FUT", security_id: 53414, sector: "Oil & Gas" },
+//   { name: "PFC JUL FUT", security_id: 53415, sector: "Financial Services" },
+//   { name: "PHOENIXLTD JUL FUT", security_id: 53416, sector: "Real Estate" },
+//   { name: "PIDILITIND JUL FUT", security_id: 53418, sector: "Chemicals" },
+//   { name: "PIIND JUL FUT", security_id: 53419, sector: "Chemicals" },
+//   { name: "PNB JUL FUT", security_id: 53420, sector: "Banking" },
+//   {
+//     name: "PNBHOUSING JUL FUT",
+//     security_id: 53421,
+//     sector: "Financial Services",
+//   },
+//   { name: "POLICYBZR JUL FUT", security_id: 53422, sector: "IT" },
+//   { name: "POLYCAB JUL FUT", security_id: 53423, sector: "Capital Goods" },
+//   {
+//     name: "POONAWALLA JUL FUT",
+//     security_id: 53424,
+//     sector: "Financial Services",
+//   },
+//   { name: "POWERGRID JUL FUT", security_id: 53425, sector: "Utilities" },
+//   { name: "PRESTIGE JUL FUT", security_id: 53426, sector: "Real Estate" },
+//   { name: "RBLBANK JUL FUT", security_id: 53427, sector: "Banking" },
+//   {
+//     name: "RECLTD JUL FUT",
+//     security_id: 53428,
+//     sector: "Financial Services",
+//   },
+//   { name: "RELIANCE JUL FUT", security_id: 53429, sector: "Conglomerate" },
+//   { name: "SAIL JUL FUT", security_id: 53430, sector: "Metals" },
+//   {
+//     name: "SBICARD JUL FUT",
+//     security_id: 53431,
+//     sector: "Financial Services",
+//   },
+//   { name: "SBILIFE JUL FUT", security_id: 53432, sector: "Insurance" },
+//   { name: "SBIN JUL FUT", security_id: 53433, sector: "Banking" },
+//   { name: "SHREECEM JUL FUT", security_id: 53434, sector: "Cement" },
+//   {
+//     name: "SHRIRAMFIN JUL FUT",
+//     security_id: 53435,
+//     sector: "Financial Services",
+//   },
+//   { name: "SIEMENS JUL FUT", security_id: 53436, sector: "Capital Goods" },
+//   { name: "SJVN JUL FUT", security_id: 53437, sector: "Utilities" },
+//   { name: "SOLARINDS JUL FUT", security_id: 53438, sector: "Chemicals" },
+//   { name: "SONACOMS JUL FUT", security_id: 53439, sector: "Automotive" },
+//   { name: "SRF JUL FUT", security_id: 53440, sector: "Chemicals" },
+//   {
+//     name: "SUNPHARMA JUL FUT",
+//     security_id: 53441,
+//     sector: "Pharmaceuticals",
+//   },
+//   {
+//     name: "SUPREMEIND JUL FUT",
+//     security_id: 53442,
+//     sector: "Consumer Durables",
+//   },
+//   {
+//     name: "SYNGENE JUL FUT",
+//     security_id: 53443,
+//     sector: "Pharmaceuticals",
+//   },
+//   { name: "TATACHEM JUL FUT", security_id: 53448, sector: "Chemicals" },
+//   { name: "TATACOMM JUL FUT", security_id: 53449, sector: "Telecom" },
+//   { name: "TATACONSUM JUL FUT", security_id: 53450, sector: "FMCG" },
+//   { name: "TATAELXSI JUL FUT", security_id: 53451, sector: "IT" },
+//   { name: "TATAMOTORS JUL FUT", security_id: 53452, sector: "Automotive" },
+//   { name: "TATAPOWER JUL FUT", security_id: 53453, sector: "Utilities" },
+//   { name: "TATASTEEL JUL FUT", security_id: 53454, sector: "Metals" },
+//   { name: "TATATECH JUL FUT", security_id: 53455, sector: "IT" },
+//   { name: "TCS JUL FUT", security_id: 53460, sector: "IT" },
+//   { name: "TECHM JUL FUT", security_id: 53461, sector: "IT" },
+//   { name: "TIINDIA JUL FUT", security_id: 53464, sector: "Automotive" },
+//   { name: "TITAGARH JUL FUT", security_id: 53465, sector: "Capital Goods" },
+//   {
+//     name: "TITAN JUL FUT",
+//     security_id: 53466,
+//     sector: "Consumer Discretionary",
+//   },
+//   {
+//     name: "TORNTPHARM JUL FUT",
+//     security_id: 53467,
+//     sector: "Pharmaceuticals",
+//   },
+//   { name: "TORNTPOWER JUL FUT", security_id: 53468, sector: "Utilities" },
+//   { name: "TRENT JUL FUT", security_id: 53469, sector: "Retail" },
+//   { name: "TVSMOTOR JUL FUT", security_id: 53470, sector: "Automotive" },
+//   { name: "ULTRACEMCO JUL FUT", security_id: 53471, sector: "Cement" },
+//   { name: "UNIONBANK JUL FUT", security_id: 53472, sector: "Banking" },
+//   { name: "UNITDSPR JUL FUT", security_id: 53473, sector: "FMCG" },
+//   { name: "UPL JUL FUT", security_id: 53474, sector: "Chemicals" },
+//   { name: "VBL JUL FUT", security_id: 53475, sector: "FMCG" },
+//   { name: "VEDL JUL FUT", security_id: 53478, sector: "Metals" },
+//   {
+//     name: "VOLTAS JUL FUT",
+//     security_id: 53479,
+//     sector: "Consumer Durables",
+//   },
+//   { name: "WIPRO JUL FUT", security_id: 53480, sector: "IT" },
+//   { name: "YESBANK JUL FUT", security_id: 53481, sector: "Banking" },
+//   {
+//     name: "ZYDUSLIFE JUL FUT",
+//     security_id: 53484,
+//     sector: "Pharmaceuticals",
+//   },
+//   { name: "PGEL JUL FUT", security_id: 53763, sector: "Utilities" },
+//   { name: "BDL JUL FUT", security_id: 64225, sector: "Defence" },
+//   {
+//     name: "BLUESTARCO JUL FUT",
+//     security_id: 64233,
+//     sector: "Consumer Durables",
+//   },
+//   { name: "FORTIS JUL FUT", security_id: 64412, sector: "Healthcare" },
+//   { name: "KAYNES JUL FUT", security_id: 64624, sector: "IT" },
+//   {
+//     name: "MANKIND JUL FUT",
+//     security_id: 64901,
+//     sector: "Pharmaceuticals",
+//   },
+//   { name: "MAZDOCK JUL FUT", security_id: 64907, sector: "Defence" },
+//   {
+//     name: "PPLPHARMA JUL FUT",
+//     security_id: 64988,
+//     sector: "Pharmaceuticals",
+//   },
+//   { name: "RVNL JUL FUT", security_id: 64997, sector: "Infrastructure" },
+//   { name: "UNOMINDA JUL FUT", security_id: 65239, sector: "Automotive" },
+// ];
+// interface StockData {
+//   _id: string;
+//   trading_symbol: string;
+//   LTP: string;
+//   close: string;
+//   sector: string;
+//   security_id: number;
+//   change?: number;
+//   [key: string]: any;
+// }
+// app.get("/api/heatmap", async (req, res) => {
+//   try {
+//     const collection = db.collection("nse_fno_stock");
+//     // Build a map for fast lookup
+//     const securityIdMap = new Map<
+//       number,
+//       { name: string; sector: string }
+//     >();
+//     const securityIds: number[] = [];
+//     securities.forEach((sec) => {
+//       securityIdMap.set(sec.security_id, {
+//         name: sec.name,
+//         sector: sec.sector,
+//       });
+//       securityIds.push(sec.security_id);
+//     });
+//     // Aggregation pipeline
+//     const pipeline = [
+//       {
+//         $match: {
+//           security_id: { $in: securityIds },
+//         },
+//       },
+//       {
+//         $sort: { received_at: -1 },
+//       },
+//       {
+//         $group: {
+//           _id: "$security_id",
+//           latestDoc: { $first: "$$ROOT" },
+//         },
+//       },
+//       {
+//         $replaceRoot: { newRoot: "$latestDoc" },
+//       },
+//       {
+//         $project: {
+//           _id: 1,
+//           security_id: 1,
+//           LTP: 1,
+//           close: 1,
+//           received_at: 1,
+//         },
+//       },
+//     ];
+//     // Run aggregation
+//     const cursor = collection.aggregate(pipeline);
+//     const items = await cursor.toArray();
+//     // Process data
+//     const processedItems: StockData[] = items.map((item) => {
+//       const securityId = Number(item.security_id);
+//       const securityInfo = securityIdMap.get(securityId);
+//       const ltp = parseFloat(item.LTP ?? "0");
+//       const close = parseFloat(item.close ?? "0");
+//       const change =
+//         ltp && close && !isNaN(ltp) && !isNaN(close) && close !== 0
+//           ? ((ltp - close) / close) * 100
+//           : undefined;
+//       return {
+//         _id: item._id?.toString() ?? "",
+//         trading_symbol: securityInfo?.name ?? "",
+//         LTP: item.LTP ?? "",
+//         close: item.close ?? "",
+//         sector: securityInfo?.sector ?? "Unknown",
+//         security_id: securityId,
+//         change,
+//       };
+//     });
+//     // Set headers and send response
+//     res.setHeader(
+//       "Cache-Control",
+//       "public, max-age=60, stale-while-revalidate=30"
+//     );
+//     res.setHeader("Vary", "Accept-Encoding");
+//     res.json(processedItems);
+//   } catch (error) {
+//     console.error("Error fetching heatmap data:", error);
+//     res.status(500).json({
+//       error: "Internal server error",
+//       details: error instanceof Error ? error.message : "Unknown error",
+//     });
+//   }
+// });

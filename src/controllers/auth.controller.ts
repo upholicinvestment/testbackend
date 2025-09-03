@@ -30,6 +30,27 @@ function normalizePhone(raw: string) {
   return p;
 }
 
+// Date helpers for expiries
+type Interval = "monthly" | "yearly";
+function addMonths(d: Date, n: number) {
+  const x = new Date(d);
+  x.setMonth(x.getMonth() + n);
+  return x;
+}
+function addYears(d: Date, n: number) {
+  const x = new Date(d);
+  x.setFullYear(x.getFullYear() + n);
+  return x;
+}
+function nextExpiry(
+  currentEndsAt: Date | null | undefined,
+  interval: Interval,
+  now = new Date()
+) {
+  const base = currentEndsAt && currentEndsAt > now ? currentEndsAt : now;
+  return interval === "yearly" ? addYears(base, 1) : addMonths(base, 1);
+}
+
 // ===== SMS (SMSGatewayHub) =====
 // Uses Node 18+ global fetch (no node-fetch needed)
 async function sendOtpSMS(phone: string, otp: string) {
@@ -53,11 +74,11 @@ async function sendOtpSMS(phone: string, otp: string) {
     const qs = new URLSearchParams({
       APIKey: API_KEY,
       senderid: SENDER_ID,
-      channel: "2", // transactional
+      channel: "2",
       DCS: "0",
       flashsms: "0",
       number,
-      text, // URLSearchParams handles encoding
+      text,
       route: ROUTE_ID,
     });
 
@@ -91,7 +112,8 @@ async function sendOtpEmail(email: string, otp: string) {
  * POST /api/auth/register-intent
  * body: {
  *  name, email, password, phone,
- *  initialProductId?, initialVariantId?, brokerConfig?
+ *  initialProductId?, initialVariantId?, brokerConfig?,
+ *  billingInterval?  // "monthly" | "yearly" (only for bundle & journaling_solo)
  * }
  * returns: { signupIntentId }
  */
@@ -105,6 +127,7 @@ export const registerIntent = async (req: Request, res: Response) => {
       initialProductId,
       initialVariantId,
       brokerConfig,
+      billingInterval, // new
     } = req.body as {
       name: string;
       email: string;
@@ -113,6 +136,7 @@ export const registerIntent = async (req: Request, res: Response) => {
       initialProductId?: string;
       initialVariantId?: string;
       brokerConfig?: Record<string, string>;
+      billingInterval?: "monthly" | "yearly";
     };
 
     if (!name || !email || !password || !phone) {
@@ -134,6 +158,7 @@ export const registerIntent = async (req: Request, res: Response) => {
     // Validate product/variant if provided (optional)
     let productId: ObjectId | null = null;
     let variantId: ObjectId | null = null;
+    let normalizedInterval: "monthly" | "yearly" = "monthly";
 
     if (initialProductId) {
       const product = await db.collection("products").findOne({
@@ -150,7 +175,10 @@ export const registerIntent = async (req: Request, res: Response) => {
 
       productId = product._id as ObjectId;
 
+      const productKey = (product as any).key as string;
+
       if ((product as any).hasVariants) {
+        // ALGO → enforce monthly-only (via variant)
         if (!initialVariantId) {
           res
             .status(400)
@@ -172,6 +200,18 @@ export const registerIntent = async (req: Request, res: Response) => {
         }
 
         variantId = (variant as any)._id as ObjectId;
+        normalizedInterval = "monthly"; // variants are monthly only
+      } else {
+        // No variants → allow yearly only for bundle/journaling_solo
+        if (
+          productKey === "essentials_bundle" ||
+          productKey === "journaling_solo"
+        ) {
+          normalizedInterval =
+            billingInterval === "yearly" ? "yearly" : "monthly";
+        } else {
+          normalizedInterval = "monthly";
+        }
       }
     }
 
@@ -186,6 +226,7 @@ export const registerIntent = async (req: Request, res: Response) => {
       productId,
       variantId,
       brokerConfig: brokerConfig || null,
+      billingInterval: normalizedInterval, // store it
       status: "created", // created | completed | cancelled | expired
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -236,32 +277,50 @@ export const finalizeSignup = async (req: Request, res: Response) => {
     }
 
     // Create user
+    const now = new Date();
     const userIns = await db.collection("users").insertOne({
       name: (intent as any).name,
       email: (intent as any).email,
       phone: (intent as any).phone,
       password: (intent as any).passwordHash,
       role: "customer",
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: now,
+      updatedAt: now,
     });
 
-    // If product selected, attach as active (free/no-payment case)
+    // If product selected, attach as active (free/no-payment case) WITH EXPIRY
     if ((intent as any).productId) {
-      await db.collection("user_products").insertOne({
-        userId: userIns.insertedId,
-        productId: (intent as any).productId,
-        variantId: (intent as any).variantId || null,
-        status: "active",
-        startedAt: new Date(),
-        endsAt: null,
-        meta: { source: "signup_free", interval: "monthly" },
-      });
-
-      // Broker config if ALGO and present
       const product = await db
         .collection("products")
         .findOne({ _id: (intent as any).productId });
+
+      const productKey = (product as any)?.key as string | undefined;
+
+      let interval: Interval = "monthly";
+      if (
+        productKey === "essentials_bundle" ||
+        productKey === "journaling_solo"
+      ) {
+        interval =
+          (((intent as any).billingInterval as Interval) || "monthly");
+      } else if (productKey === "algo_simulator") {
+        interval = "monthly";
+      }
+
+      const variantId = (intent as any).variantId || null;
+      const newEndsAt = nextExpiry(null, interval, now);
+
+      await db.collection("user_products").insertOne({
+        userId: userIns.insertedId,
+        productId: (intent as any).productId,
+        variantId,
+        status: "active",
+        startedAt: now,
+        endsAt: newEndsAt,
+        meta: { source: "signup_free", interval },
+      });
+
+      // Broker config if ALGO and present
       if (
         (product as any)?.key === "algo_simulator" &&
         (intent as any).variantId &&
@@ -272,8 +331,8 @@ export const finalizeSignup = async (req: Request, res: Response) => {
           productId: (intent as any).productId,
           variantId: (intent as any).variantId,
           brokerName: (intent as any).brokerConfig?.brokerName,
-          createdAt: new Date(),
-          updatedAt: new Date(),
+          createdAt: now,
+          updatedAt: now,
           ...((intent as any).brokerConfig || {}),
         });
       }
