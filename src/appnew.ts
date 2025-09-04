@@ -100,12 +100,12 @@ const QUOTE_BATCH_SIZE = 1000;
 const QUOTE_INTERVAL = 2500; // 1.2 seconds (slightly above 1s to avoid 429)
 
 async function startMarketQuotePolling() {
-  // console.log("🚀 Starting Market Quote Polling...");
+  console.log("🚀 Starting Market Quote Polling...");
   let currentIndex = 0;
 
   setInterval(async () => {
     if (!isMarketOpen()) {
-      // console.log("⏳ Market closed. Skipping Market Quote Polling.");
+      console.log("⏳ Market closed. Skipping Market Quote Polling.");
       return;
     }
 
@@ -143,7 +143,7 @@ const dhanSocket = new DhanSocket(
 if (isMarketOpen()) {
   dhanSocket.connect(securityIds);
 } else {
-  // console.log("⏳ Market is closed. Skipping WebSocket connection.");
+  console.log("⏳ Market is closed. Skipping WebSocket connection.");
 }
 
 // --------------------------------------------------------
@@ -158,7 +158,7 @@ const connectDB = async () => {
     mongoClient = new MongoClient(process.env.MONGO_URI);
     await mongoClient.connect();
     db = mongoClient.db(process.env.MONGO_DB_NAME);
-    // console.log("✅ Connected to MongoDB");
+    console.log("✅ Connected to MongoDB");
 
     // Inject DB into controllers
     setDatabase(db);
@@ -212,12 +212,12 @@ const connectDB = async () => {
     // Start HTTP + WebSocket server
     const PORT = Number(process.env.PORT) || 8000;
     httpServer.listen(PORT, () => {
-      // console.log(`🚀 Server running at http://localhost:${PORT}`);
-      // console.log(
-      //   `🔗 Allowed CORS origin: ${
-      //     process.env.CLIENT_URL || "http://localhost:5173"
-      //   }`
-      // );
+      console.log(`🚀 Server running at http://localhost:${PORT}`);
+      console.log(
+        `🔗 Allowed CORS origin: ${
+          process.env.CLIENT_URL || "http://localhost:5173"
+        }`
+      );
     });
   } catch (err) {
     console.error("❌ MongoDB connection error:", err);
@@ -240,7 +240,7 @@ const io = new SocketIOServer(httpServer, {
 });
 
 io.on("connection", (socket) => {
-  // console.log("🔌 New client connected:", socket.id);
+  console.log("🔌 New client connected:", socket.id);
   socket.on("disconnect", (reason) =>
     console.log(`Client disconnected (${socket.id}):`, reason)
 );
@@ -249,10 +249,10 @@ io.on("connection", (socket) => {
 
 // Graceful shutdown
 process.on("SIGINT", async () => {
-  // console.log("🛑 Shutting down gracefully...");
+  console.log("🛑 Shutting down gracefully...");
   await mongoClient.close();
   httpServer.close(() => {
-    // console.log("✅ Server closed");
+    console.log("✅ Server closed");
     process.exit(0);
   });
 });
