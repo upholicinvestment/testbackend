@@ -46,8 +46,8 @@ const oidFrom = (ns: string) => {
         hasVariants: false,
         forSale: true,
         route: "/dashboard",
-        priceMonthly: Number(process.env.BUNDLE_MONTHLY_PRICE ?? 499),
-        priceYearly: Number(process.env.BUNDLE_YEARLY_PRICE ?? 4999),
+        priceMonthly: Number(process.env.BUNDLE_MONTHLY_PRICE ?? 1),   //499
+        priceYearly: Number(process.env.BUNDLE_YEARLY_PRICE ?? 2),    //4999
         components: [
           // "technical_scanner",
           // "fundamental_scanner",
@@ -88,7 +88,7 @@ const oidFrom = (ns: string) => {
       {
         _id: P("journaling"),
         key: "journaling",
-        name: "Journaling",
+        name: "TradeKhata",
         isActive: true,
         hasVariants: false,
         forSale: false,
@@ -115,17 +115,17 @@ const oidFrom = (ns: string) => {
         route: "/dashboard",
       },
 
-      // Journaling (Solo) → monthly + yearly
+      // TradeKhata → monthly + yearly
       {
         _id: P("journaling_solo"),
         key: "journaling_solo",
-        name: "Journaling (Solo)",
+        name: "TradeKhata",
         isActive: true,
         hasVariants: false,
         forSale: true,
         route: "/journal",
-        priceMonthly: Number(process.env.JOURNALING_SOLO_MONTHLY_PRICE ?? 299),
-        priceYearly: Number(process.env.JOURNALING_SOLO_YEARLY_PRICE ?? 2499),
+        priceMonthly: Number(process.env.JOURNALING_SOLO_MONTHLY_PRICE ?? 1),    //299
+        priceYearly: Number(process.env.JOURNALING_SOLO_YEARLY_PRICE ?? 2),      //2499
       },
     ];
 
@@ -155,7 +155,7 @@ const oidFrom = (ns: string) => {
         key: "starter",
         name: "Starter Scalping",
         description: "Beginner-friendly scalping suite",
-        priceMonthly: 5999,
+        priceMonthly: 1,  //5999
         interval: "monthly",
         isActive: true,
       },
@@ -165,7 +165,7 @@ const oidFrom = (ns: string) => {
         key: "pro",
         name: "Option Scalper PRO",
         description: "Advanced option scalping engine",
-        priceMonthly: 14999,
+        priceMonthly: 1,   //14999
         interval: "monthly",
         isActive: true,
       },
@@ -173,9 +173,9 @@ const oidFrom = (ns: string) => {
         _id: V("algo_simulator", "swing"),
         productId: algoId,
         key: "swing",
-        name: "Swing Trader Master",
-        description: "Swing trading strategy system",
-        priceMonthly: 9999,
+        name: "Sniper Algo",
+        description: "Sniper trading strategy system",
+        priceMonthly: 1,   //9999
         interval: "monthly",
         isActive: true,
       },
@@ -218,14 +218,14 @@ const oidFrom = (ns: string) => {
       .collection("product_variants")
       .countDocuments({ productId: algoId });
 
-    // console.log(`📦 products count: ${productsCount}`);
-    // console.log(`🧩 ALGO variants count: ${variantsCount}`);
-    // console.log("✅ Seed complete (stable IDs + yearly pricing).");
+    console.log(`📦 products count: ${productsCount}`);
+    console.log(`🧩 ALGO variants count: ${variantsCount}`);
+    console.log("✅ Seed complete (stable IDs + yearly pricing).");
   } catch (err) {
     console.error("❌ Seeding failed:", err);
     process.exitCode = 1;
   } finally {
     await client.close();
-    // console.log("🔌 MongoDB connection closed.");
+    console.log("🔌 MongoDB connection closed.");
   }
 })();
