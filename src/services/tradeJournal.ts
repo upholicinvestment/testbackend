@@ -1,9 +1,11 @@
+
 import multer from "multer";
 import csvParser from "csv-parser";
 import fs from "fs";
-import path from "path";
 
-// ----------- TYPES -----------
+/* =========================
+   Types
+========================= */
 export interface Trade {
   Date: string;
   Time?: string;
@@ -54,8 +56,19 @@ export interface ScripSummaryRow {
   netRealized: number;
 }
 
+export interface OpenPosition {
+  symbol: string;
+  side: "Buy" | "Sell";
+  quantity: number;
+  /** weighted avg entry price of the remaining (unpaired) legs on that side */
+  avgPrice?: number;
+}
+
 export interface Stats {
   netPnl: number;
+  pnlBasis: "PAIRED_RAW";
+  totalsCheck?: { netPnlFromScrips: number; chargesFromScrips: number };
+
   tradeWinPercent: number;
   profitFactor: number;
   dayWinPercent: number;
@@ -63,9 +76,10 @@ export interface Stats {
   upholicScore: number;
   upholicPointers: {
     patience: number;
-    demonFinder: string[];
-    planOfAction: string[];
+    demonFinder: string[];   // top-3 “reasons” derived from trades
+    planOfAction: string[];  // (kept for compatibility; UI won’t use “actions”)
   };
+
   trades: RoundTrip[];
   tradeDates: string[];
   empty: boolean;
@@ -77,49 +91,86 @@ export interface Stats {
   standardGood: string[];
   enteredTooSoonCount: number;
 
-  // NEW
   scripSummary: ScripSummaryRow[];
+
+  pairedTotals: {
+    buyQty: number;
+    sellQty: number;
+    avgBuy: number;
+    avgSell: number;
+    charges: number;
+    netPnl: number;
+  };
+
+  openPositions?: OpenPosition[];
 }
 
-// ----------- CONSTANTS -----------
 export const standardDemons = [
-  "POOR RISK/REWARD TRADE", "HELD LOSS TOO LONG", "PREMATURE EXIT",
-  "REVENGE TRADING", "OVERTRADING", "WRONG POSITION SIZE",
-  "CHASED ENTRY", "MISSED STOP LOSS"
+  "POOR RISK/REWARD TRADE",
+  "HELD LOSS TOO LONG",
+  "PREMATURE EXIT",
+  "REVENGE TRADING",
+  "OVERTRADING",
+  "WRONG POSITION SIZE",
+  "CHASED ENTRY",
+  "MISSED STOP LOSS",
 ];
 
 export const standardGood = [
-  "GOOD RISK/REWARD", "PROPER ENTRY", "PROPER EXIT",
-  "FOLLOWED PLAN", "STOP LOSS RESPECTED", "HELD FOR TARGET", "DISCIPLINED"
+  "GOOD RISK/REWARD",
+  "PROPER ENTRY",
+  "PROPER EXIT",
+  "FOLLOWED PLAN",
+  "STOP LOSS RESPECTED",
+  "HELD FOR TARGET",
+  "DISCIPLINED",
 ];
 
-// ----------- UTIL -----------
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-// ----------- MULTER UPLOAD -----------
 export const tradeJournalUpload = multer({ dest: "uploads/" });
 
-// ----------- DATE NORMALIZER -----------
+/* =========================
+   Date normalize
+========================= */
 function normalizeTradeDate(dateStr: string | undefined | null): string {
   if (!dateStr) return "";
   if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) return dateStr.slice(0, 10);
-  const mdy = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (mdy) { const [_, m, d, y] = mdy; return `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`; }
-  const dmy = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (dmy) { const [_, d, m, y] = dmy; return `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`; }
+
+  const mdy = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); // MM/DD/YYYY
+  if (mdy) {
+    const [, m, d, y] = mdy;
+    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+
+  const dmy = dateStr.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/); // DD/MM/YYYY or DD-MM-YYYY
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+
+  const dMonY = dateStr.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})/); // 09-Sep-2025
+  if (dMonY) {
+    const [, d, mon, y] = dMonY;
+    const idx = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(mon.toLowerCase());
+    if (idx >= 0) return `${y}-${String(idx+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  }
+
   return dateStr.slice(0, 10);
 }
 
-// ----------- CSV PARSER -----------
+/* =========================
+   CSV Parser (universal)
+========================= */
 function findTradeTableHeaderIndex(lines: string[]): number {
   const possibleHeaders = [
     "Scrip/Contract,Buy/Sell,Buy Price",
     "symbol,isin,trade_date",
-    "Scrip Name,Trade Type,Trade Date"
+    "Scrip Name,Trade Type,Trade Date",
   ];
-  return lines.findIndex(line =>
-    possibleHeaders.some(header =>
-      line.replace(/\s/g, '').toLowerCase().startsWith(header.replace(/\s/g, '').toLowerCase())
+  return lines.findIndex((line) =>
+    possibleHeaders.some((header) =>
+      line.replace(/\s/g, "").toLowerCase().startsWith(header.replace(/\s/g, "").toLowerCase())
     )
   );
 }
@@ -174,7 +225,12 @@ export async function parseUniversalTradebook(filePath: string): Promise<Trade[]
           const price = side === "buy" ? buyRaw : sellRaw;
 
           let date = row["Date"] || row["Trade Date"] || "";
-          let time = row["Time"] || row["Trade Time"] || row["Order Time"] || row["TradeDateTime"] || "";
+          let time =
+            row["Time"] ||
+            row["Trade Time"] ||
+            row["Order Time"] ||
+            row["TradeDateTime"] ||
+            "";
           if (typeof time === "string" && time.includes(" ")) {
             const [d, t] = time.split(" "); date = d; time = t;
           }
@@ -185,7 +241,7 @@ export async function parseUniversalTradebook(filePath: string): Promise<Trade[]
             (parseFloat(row["Exchange Turnover"]) || 0);
 
           const chargeFields = [
-            "Brokerage","GST","STT","Sebi Tax","Stamp Duty","Other Charges","IPFT Charges"
+            "Brokerage","GST","STT","Sebi Tax","Stamp Duty","Other Charges","IPFT Charges",
           ];
           const baseCharges = chargeFields.reduce((s, k) => s + (parseFloat(row[k]) || 0), 0);
           const charges = baseCharges + (exchangeTurnover || 0);
@@ -208,42 +264,24 @@ export async function parseUniversalTradebook(filePath: string): Promise<Trade[]
           });
         }
       })
-      .on("end", () => { fs.unlinkSync(tempCsv); resolve(trades); })
-      .on("error", (err) => { fs.unlinkSync(tempCsv); reject(err); });
+      .on("end", () => { try { fs.unlinkSync(tempCsv); } catch {} resolve(trades); })
+      .on("error", (err) => { try { fs.unlinkSync(tempCsv); } catch {} reject(err); });
   });
 }
 
-// ----------- Helper: broker-like baseline from raw rows -----------
-function computeBaselineNetFromRaw(trades: Trade[]): number | null {
-  const hasRaw = trades.some(t => t.buyPriceRaw !== undefined || t.sellPriceRaw !== undefined);
-  if (!hasRaw) return null;
-  let grossSell = 0, grossBuy = 0, allCharges = 0;
-  for (const t of trades) {
-    const q = t.Quantity || 0;
-    if (t.sellPriceRaw && q) grossSell += t.sellPriceRaw * q;
-    if (t.buyPriceRaw  && q) grossBuy  += t.buyPriceRaw  * q;
-    allCharges += (t.Charges || 0);
-  }
-  return r2(grossSell - grossBuy - allCharges);
-}
-
-// ----------- Helper: detect open positions -----------
-function hasOpenPositions(trades: Trade[]): boolean {
-  const net: Record<string, number> = {};
-  for (const t of trades) {
-    const q = t.Quantity || 0;
-    const s = t.Symbol || "";
-    if (!s || !q) continue;
-    net[s] = (net[s] || 0) + (t.Direction === "Buy" ? q : -q);
-  }
-  return Object.values(net).some(v => Math.abs(v) > 0);
-}
-
-// ----------- ROUND TRIP PAIRING (with charge proration) -----------
-function pairRoundTrips(trades: Trade[]): RoundTrip[] {
+/* =========================
+   Pairing (FIFO) & open legs
+========================= */
+function pairRoundTripsAndOpen(trades: Trade[]): {
+  roundTrips: RoundTrip[];
+  openLegsBySymbol: Record<string, Trade[]>;
+} {
   const sorted = trades
     .filter(t => t.Symbol && t.Direction && t.Quantity && t.Price !== undefined)
-    .sort((a, b) => new Date(`${a.Date}T${a.Time || "00:00"}`).getTime() - new Date(`${b.Date}T${b.Time || "00:00"}`).getTime());
+    .sort((a, b) =>
+      new Date(`${a.Date}T${a.Time || "00:00"}`).getTime() -
+      new Date(`${b.Date}T${b.Time || "00:00"}`).getTime()
+    );
 
   const roundTrips: RoundTrip[] = [];
   const openPositions: Record<string, Trade[]> = {};
@@ -320,50 +358,148 @@ function pairRoundTrips(trades: Trade[]): RoundTrip[] {
       openLegs.push({ ...trade, _fullQty: trade._fullQty ?? trade.Quantity });
     }
   }
-  return roundTrips;
+
+  return { roundTrips, openLegsBySymbol: openPositions };
 }
 
-// ----------- RECONCILIATION -----------
-function reconcileRoundTripsToBaseline(roundTrips: RoundTrip[], baselineNet: number | null) {
-  if (baselineNet === null || roundTrips.length === 0) return;
-  const sumPairs = roundTrips.reduce((s, r) => s + r.PnL, 0);
-  const delta = r2(baselineNet - sumPairs);
-  if (Math.abs(delta) < 0.01) return;
-
-  let totalAbs = roundTrips.reduce((s, r) => s + Math.abs(r.PnL), 0);
-  if (totalAbs === 0) totalAbs = roundTrips.length;
-
-  let allocated = 0;
-  for (let i = 0; i < roundTrips.length; i++) {
-    const r = roundTrips[i];
-    const weight = totalAbs === roundTrips.length ? 1 / roundTrips.length : Math.abs(r.PnL) / totalAbs;
-    const adj = (i === roundTrips.length - 1) ? r2(delta - allocated) : r2(delta * weight);
-    r.PnL = r2(r.PnL + adj);
-    r.NetPnL = r.PnL;
-    allocated = r2(allocated + adj);
+/* =========================
+   RAW headline & tables
+========================= */
+function computePairedHeadlineFromRawSymbolFilter(trades: Trade[]) {
+  const withBuy = new Set<string>();
+  const withSell = new Set<string>();
+  for (const t of trades) {
+    if (!t.Symbol) continue;
+    if (t.Direction === "Buy") withBuy.add(t.Symbol);
+    else if (t.Direction === "Sell") withSell.add(t.Symbol);
   }
+  const pairedSymbols = new Set<string>([...withBuy].filter(s => withSell.has(s)));
+
+  let buyQty = 0, sellQty = 0, buyNotional = 0, sellNotional = 0, totalCharges = 0;
+
+  for (const t of trades) {
+    if (!t.Symbol || !pairedSymbols.has(t.Symbol)) continue;
+    const q = t.Quantity || 0;
+    const price =
+      t.Direction === "Buy"
+        ? (t.buyPriceRaw ?? t.Price ?? 0)
+        : (t.sellPriceRaw ?? t.Price ?? 0);
+
+    if (t.Direction === "Buy") { buyQty += q; buyNotional += price * q; }
+    else                        { sellQty += q; sellNotional += price * q; }
+
+    totalCharges += t.Charges || 0; // FULL row charges
+  }
+
+  const avgBuy  = buyQty  ? buyNotional  / buyQty  : 0;
+  const avgSell = sellQty ? sellNotional / sellQty : 0;
+  const netPnl  = (sellNotional - buyNotional) - totalCharges;
+
+  return {
+    buyQty,
+    sellQty,
+    avgBuy: r2(avgBuy),
+    avgSell: r2(avgSell),
+    charges: r2(totalCharges),
+    netPnl: r2(netPnl),
+    pairedSymbols
+  } as const;
 }
 
-// ----------- ANALYSIS -----------
+function buildRawScripSummary(trades: Trade[], pairedSymbols: Set<string>): ScripSummaryRow[] {
+  type Agg = { buyQty: number; sellQty: number; buyNotional: number; sellNotional: number; charges: number; };
+  const per = new Map<string, Agg>();
+
+  for (const t of trades) {
+    if (!t.Symbol || !pairedSymbols.has(t.Symbol)) continue;
+
+    const a = per.get(t.Symbol) ?? { buyQty: 0, sellQty: 0, buyNotional: 0, sellNotional: 0, charges: 0 };
+    const q = t.Quantity || 0;
+    const price =
+      t.Direction === "Buy"
+        ? (t.buyPriceRaw ?? t.Price ?? 0)
+        : (t.sellPriceRaw ?? t.Price ?? 0);
+
+    if (t.Direction === "Buy") { a.buyQty += q; a.buyNotional += price * q; }
+    else                        { a.sellQty += q; a.sellNotional += price * q; }
+
+    a.charges += t.Charges || 0;
+    per.set(t.Symbol, a);
+  }
+
+  const rows: ScripSummaryRow[] = [];
+  for (const [symbol, a] of per) {
+    const qty = Math.min(a.buyQty, a.sellQty);
+    const avgBuy  = a.buyQty  ? a.buyNotional  / a.buyQty  : 0;
+    const avgSell = a.sellQty ? a.sellNotional / a.sellQty : 0;
+    const net = (a.sellNotional - a.buyNotional) - a.charges;
+
+    rows.push({
+      symbol,
+      quantity: qty,
+      avgBuy: r2(avgBuy),
+      avgSell: r2(avgSell),
+      charges: r2(a.charges),
+      netRealized: r2(net),
+    });
+  }
+
+  rows.sort((x, y) => y.netRealized - x.netRealized);
+  return rows;
+}
+
+/** Build open positions with precise avg price from FIFO leftovers */
+function buildOpenPositionsFromOpenLegs(openLegsBySymbol: Record<string, Trade[]>): OpenPosition[] {
+  const out: OpenPosition[] = [];
+  for (const [symbol, legs] of Object.entries(openLegsBySymbol)) {
+    if (!legs?.length) continue;
+
+    // Net side and total qty
+    let qty = 0;
+    for (const l of legs) qty += l.Direction === "Buy" ? l.Quantity || 0 : -(l.Quantity || 0);
+    if (qty === 0) continue;
+
+    const side: "Buy" | "Sell" = qty > 0 ? "Buy" : "Sell";
+    const remainingQty = Math.abs(qty);
+
+    // Only consider legs that match the net side; compute weighted avg using RAW price when available
+    let wNotional = 0, wQty = 0;
+    for (const l of legs) {
+      if (l.Direction !== side) continue;
+      const q = l.Quantity || 0;
+      if (!q) continue;
+      const rawPrice = side === "Buy" ? (l.buyPriceRaw ?? l.Price ?? 0) : (l.sellPriceRaw ?? l.Price ?? 0);
+      wNotional += rawPrice * q;
+      wQty += q;
+    }
+    const avgPrice = wQty ? wNotional / wQty : 0;
+
+    out.push({ symbol, side, quantity: remainingQty, avgPrice: r2(avgPrice) });
+  }
+  // sort for stable UI
+  out.sort((a,b) => a.symbol.localeCompare(b.symbol));
+  return out;
+}
+
+/* =========================
+   Main processor
+========================= */
 export function processTrades(trades: Trade[]): Stats {
-  // params
-  const minGoodRR = 1.2, maxRiskPercent = 2.0, overtradeLimit = 5;
-  const earlyEntryCutoff = "09:20", revengeWindowMins = 15, SLTolerance = 1.3;
+  // FIFO pairing for behavior analytics + we also keep the open legs map
+  const { roundTrips, openLegsBySymbol } = pairRoundTripsAndOpen(trades);
 
-  // pair
-  const roundTrips = pairRoundTrips(trades);
+  // RAW paired-only headline & scrip table
+  const pairedRaw = computePairedHeadlineFromRawSymbolFilter(trades);
+  const netPnl = pairedRaw.netPnl;
+  const scripSummary = buildRawScripSummary(trades, pairedRaw.pairedSymbols);
 
-  // reconcile only if no open positions
-  const baselineNet = hasOpenPositions(trades) ? null : computeBaselineNetFromRaw(trades);
-  reconcileRoundTripsToBaseline(roundTrips, baselineNet);
+  // precise open positions (with avgPrice)
+  const openPositions = buildOpenPositionsFromOpenLegs(openLegsBySymbol);
 
-  // aggregates
+  // === KPIs (from roundTrips for behavior analysis) ===
   let wins = 0, losses = 0, profitSum = 0, lossSum = 0;
   const pnlByDate: Record<string, number> = {};
   const tradeDates: string[] = [];
-  const capital = 100000;
-  let prevLossExitTime: Date | null = null;
-  let prevLossDirection: "Buy" | "Sell" | null = null;
 
   for (const rt of roundTrips) {
     const d = rt.exit.Date;
@@ -375,6 +511,15 @@ export function processTrades(trades: Trade[]): Stats {
 
   const avgWin = wins ? profitSum / wins : 0;
   const avgLoss = losses ? lossSum / losses : 0;
+  const tradeWinPercent = roundTrips.length ? (wins / roundTrips.length) * 100 : 0;
+  const profitFactor = lossSum === 0 ? (profitSum > 0 ? Infinity : 0) : profitSum / lossSum;
+  const dayWinPercent = tradeDates.length
+    ? (Object.values(pnlByDate).filter(v => v > 0).length / tradeDates.length) * 100
+    : 0;
+
+  // === Demon / Good practice tagging ===
+  const minGoodRR = 1.2, maxRiskPercent = 2.0, overtradeLimit = 5;
+  const earlyEntryCutoff = "09:20", revengeWindowMins = 15, SLTolerance = 1.3;
 
   const badTagSummary: Record<string, { count: number, totalCost: number }> = {};
   const goodTagSummary: Record<string, { count: number, totalProfit: number }> = {};
@@ -384,6 +529,9 @@ export function processTrades(trades: Trade[]): Stats {
   let totalBadTradeCost = 0;
   let totalGoodTradeProfit = 0;
   let enteredTooSoonCount = 0;
+  const capital = 100000;
+  let prevLossExitTime: Date | null = null;
+  let prevLossDirection: "Buy" | "Sell" | null = null;
   const dayOrdinal: Record<string, number> = {};
 
   for (const t of roundTrips) {
@@ -418,11 +566,10 @@ export function processTrades(trades: Trade[]): Stats {
     }
     if (t.PnL < 0) { prevLossExitTime = new Date(`${t.exit.Date}T${t.exit.Time || "00:00"}`); prevLossDirection = t.entry.Direction; }
 
+    // Good tags
     if (t.PnL > 0 && avgLoss > 0 && t.PnL >= Math.abs(avgLoss * 1.2)) good.push("GOOD RISK/REWARD");
-
     const notEarly = !t.entry.Time || t.entry.Time >= earlyEntryCutoff;
     const respectedSL = (t.PnL <= 0 && Math.abs(t.PnL) <= Math.abs(avgLoss * SLTolerance)) || t.PnL > 0;
-
     if (!demons.includes("CHASED ENTRY") && notEarly && respectedSL) good.push("PROPER ENTRY");
     if (!demons.includes("PREMATURE EXIT") && !demons.includes("MISSED STOP LOSS")) good.push("PROPER EXIT");
     if (t.PnL < 0 && Math.abs(t.PnL) <= Math.abs(avgLoss * SLTolerance)) good.push("STOP LOSS RESPECTED");
@@ -447,92 +594,52 @@ export function processTrades(trades: Trade[]): Stats {
     }
   }
 
-  const totalTrades = roundTrips.length;
-  const tradeWinPercent = totalTrades ? (wins / totalTrades) * 100 : 0;
-  const profitFactor = lossSum === 0 ? (profitSum > 0 ? Infinity : 0) : profitSum / lossSum;
-  const dayWinPercent = Object.keys(pnlByDate).length ? (Object.values(pnlByDate).filter(v => v > 0).length / Object.keys(pnlByDate).length * 100) : 0;
-
   const demonFinder = Object.entries(badTagSummary).sort((a,b) => b[1].count - a[1].count).slice(0,3).map(([d]) => d);
-  const actionableByDemon: Record<string,string> = {
-    "POOR RISK/REWARD TRADE":"Only take setups with ≥1.5R potential; predefine targets and partial exits.",
-    "HELD LOSS TOO LONG":"Use hard SL and exit immediately when hit—no averaging down or hoping.",
-    "PREMATURE EXIT":"Trail stops using structure; take partial at 1R and let the rest run.",
-    "REVENGE TRADING":"After a loss, enforce a 15–30 min cooldown—skip the very next signal.",
-    "OVERTRADING":"Cap to 5 trades/day; stop after 2 consecutive losses for the session.",
-    "WRONG POSITION SIZE":"Risk ≤2% per trade; size via calculator using stop distance.",
-    "CHASED ENTRY":"Avoid early entries; wait for retest/limit fill and skip first 5 minutes.",
-    "MISSED STOP LOSS":"Place OCO protective stops with the entry and never cancel them."
-  };
-  const candidateActions: string[] = [];
-  demonFinder.forEach(d => actionableByDemon[d] && candidateActions.push(actionableByDemon[d]));
-  if (tradeWinPercent < 40) candidateActions.push("Trade only A+ setups for a week; skip marginal conditions.");
-  if (!Number.isFinite(profitFactor) || profitFactor < 1) candidateActions.push("Tighten losses and let winners run using R-based take-profits.");
-  if (enteredTooSoonCount > 0) candidateActions.push("No entries before 09:20—let structure form before engaging.");
-  const planOfAction = Array.from(new Set(candidateActions)).slice(0, 3);
+
+  const planOfAction: string[] = []; // kept for compatibility; UI shows “What went wrong”
+// keep field for compatibility (UI now shows “What went wrong”, not actions)
   const upholicScore = Math.min(100, (80 * 0.4) + (tradeWinPercent * 0.3) + (dayWinPercent * 0.3));
 
-  // header Net P&L (reconciled)
-  const netPnl = r2(roundTrips.reduce((s, r) => s + r.PnL, 0));
-
-  // ===== DIRECTION-AWARE SCRIP SUMMARY (uses reconciled P&L for net, back-solves charges) =====
-  type Agg = { qty: number; grossBuy: number; grossSell: number; reconNet: number; };
-  const per = new Map<string, Agg>();
-
-  for (const rt of roundTrips) {
-    const sym = rt.symbol;
-    const q = rt.entry.Quantity || 0; // per slice
-    let grossBuy = 0, grossSell = 0;
-
-    if (rt.entry.Direction === "Buy") {
-      grossBuy  = (rt.entry.Price || 0) * q;
-      grossSell = (rt.exit.Price  || 0) * q;
-    } else {
-      grossBuy  = (rt.exit.Price  || 0) * q;   // buy at exit
-      grossSell = (rt.entry.Price || 0) * q;   // sell at entry
-    }
-
-    const a = per.get(sym) ?? { qty: 0, grossBuy: 0, grossSell: 0, reconNet: 0 };
-    a.qty      += q;
-    a.grossBuy += grossBuy;
-    a.grossSell+= grossSell;
-    a.reconNet += rt.PnL;   // <-- use reconciled slice P&L
-    per.set(sym, a);
-  }
-
-  const scripSummary: ScripSummaryRow[] = Array.from(per.entries()).map(([symbol, a]) => {
-    const avgBuy  = a.qty ? r2(a.grossBuy  / a.qty) : 0;
-    const avgSell = a.qty ? r2(a.grossSell / a.qty) : 0;
-    const charges = r2((a.grossSell - a.grossBuy) - a.reconNet); // back-solve so rows sum to header
-    return {
-      symbol,
-      quantity: a.qty,
-      avgBuy,
-      avgSell,
-      charges,
-      netRealized: r2(a.reconNet),
-    };
-  }).sort((x, y) => y.netRealized - x.netRealized);
+  const totalsCheck = {
+    netPnlFromScrips: r2(scripSummary.reduce((s, r) => s + (r.netRealized || 0), 0)),
+    chargesFromScrips: r2(scripSummary.reduce((s, r) => s + (r.charges || 0), 0)),
+  };
 
   return {
-    netPnl,
-    tradeWinPercent,
+    netPnl: r2(netPnl),
+    pnlBasis: "PAIRED_RAW",
+    totalsCheck,
+
+    tradeWinPercent: r2(tradeWinPercent),
     profitFactor,
-    dayWinPercent,
-    avgWinLoss: { avgWin, avgLoss },
+    dayWinPercent: r2(dayWinPercent),
+    avgWinLoss: { avgWin: r2(avgWin), avgLoss: r2(avgLoss) },
     upholicScore: Math.max(0, Math.round(upholicScore)),
     upholicPointers: { patience: 80, demonFinder, planOfAction },
+
     trades: roundTrips,
     tradeDates,
     empty: roundTrips.length === 0,
-    totalBadTradeCost,
-    totalGoodTradeProfit,
+
+    totalBadTradeCost: r2(totalBadTradeCost),
+    totalGoodTradeProfit: r2(totalGoodTradeProfit),
     badTradeCounts: badTagSummary,
     goodTradeCounts: goodTagSummary,
     standardDemons,
     standardGood,
     enteredTooSoonCount,
 
-    // new table
     scripSummary,
+
+    pairedTotals: {
+      buyQty: pairedRaw.buyQty,
+      sellQty: pairedRaw.sellQty,
+      avgBuy: pairedRaw.avgBuy,
+      avgSell: pairedRaw.avgSell,
+      charges: pairedRaw.charges,
+      netPnl: pairedRaw.netPnl,
+    },
+
+    openPositions,
   };
 }

@@ -65,6 +65,11 @@ import { ensureCalendarIndexes } from "./services/snapshots";
 
 /* ---------- PUBLIC Orderbook bundle (summary/strategies) ---------- */
 import { Orderbook } from "./api/orderbook";
+import registerFeedbackRoutes from "./routes/registerFeedbackRoutes";
+
+/* ------------ Vercel Analytics --------- */
+// import { inject } from "@vercel/analytics";
+// inject();
 
 dotenv.config();
 
@@ -180,9 +185,33 @@ const connectDB = async () => {
     // Contact & careers
     registerContactRoutes(app, db);
     app.use("/api/careers", registerCareersRoutes(db));
+    app.use("/api/feedback", registerFeedbackRoutes(db));
 
-    // PUBLIC Orderbook/summary/strategies endpoints (use X-User-Id)
+    // PUBLIC Orderbook/summary/strategies endpoints (use X-User-Id or ?userId=)
     Orderbook(app, db);
+
+    // ---------- PUBLIC legacy alias ----------
+    // Allow old client calls to /api/orders/triggered to work without JWT.
+    // It forwards to the public /api/trades/list endpoint (same query + userId passthrough).
+    app.get(
+      "/api/orders/triggered",
+      (req: Request, _res: Response, next: NextFunction) => {
+        const origQs = new URLSearchParams(req.url.split("?")[1] || "");
+        const from = origQs.get("from") || "";
+        const to = origQs.get("to") || "";
+        const userId = origQs.get("userId") || "";
+
+        // Rebuild to /api/trades/list (public Orderbook route)
+        const target =
+          `/api/trades/list?from=${encodeURIComponent(from)}` +
+          `&to=${encodeURIComponent(to)}` +
+          (userId ? `&userId=${encodeURIComponent(userId)}` : "");
+
+        // Mutate and continue through router stack so the mounted handler catches it
+        req.url = target;
+        next();
+      }
+    );
 
     // Misc analytics/data (keep these public if desired)
     AnalysisRoutes(app, db);
