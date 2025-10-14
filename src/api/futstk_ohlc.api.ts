@@ -1,36 +1,71 @@
 // src/api/futstk_ohlc.api.ts
 import type { Express, RequestHandler } from "express";
-import { fetchAndSaveFutstkOhlc, fetchOhlc } from "../services/quote.service";
+import {
+  fetchAndSaveFutstkOhlc,
+  refreshAndUpsertFutstkOhlc,
+  fetchOhlc,
+} from "../services/quote.service";
 
 export default function registerFutstkOhlcRoutes(app: Express) {
   /**
-   * GET /api/futstk/ohlc?expiry=2025-10-30
+   * INSERT endpoint (one-shot):
+   * GET /api/futstk/ohlc?expiry=2025-10-28
    * Also accepts: 28-10-2025 or 28-10-2025 14:30:00
-   * Persists into `nse_futstk_ohlc`
+   * Writes NEW rows to `nse_futstk_ohlc` (no upsert) and appends ticks to `nse_futstk_ticks`.
    */
-  const handler: RequestHandler = async (req, res) => {
+  const insertHandler: RequestHandler = async (req, res) => {
     const expiryParam = req.query.expiry;
+    const forceZeroParam = String(req.query.forceZero || "").toLowerCase();
+    const forceZero = forceZeroParam === "true";
+
     if (!expiryParam || typeof expiryParam !== "string" || !expiryParam.trim()) {
       res.status(400).json({
-        error:
-          "Query param 'expiry' is required. Example: /api/futstk/ohlc?expiry=2025-10-30",
+        error: "Query param 'expiry' is required. Example: /api/futstk/ohlc?expiry=2025-10-28",
       });
       return;
     }
 
     try {
-      const summary = await fetchAndSaveFutstkOhlc(expiryParam);
-      res.json({ expiry: expiryParam, ...summary });
+      const summary = await fetchAndSaveFutstkOhlc(expiryParam, forceZero);
+      res.json({ expiry: expiryParam, forceZero, ...summary });
     } catch (err: any) {
-      console.error("FUTSTK OHLC route error:", err?.message || err);
+      console.error("FUTSTK OHLC (insert) route error:", err?.message || err);
       res.status(500).json({ error: "Internal server error" });
     }
   };
 
   /**
+   * REFRESH/UPSERT endpoint (recommended):
+   * GET /api/futstk/ohlc/refresh?expiry=2025-10-28&forceZero=false
+   * - Upserts in place on {security_id, expiry_date}
+   * - Keeps a single doc per contract+expiry and updates its fields
+   * - Appends the same snapshot as a tick in `nse_futstk_ticks`
+   */
+  const refreshHandler: RequestHandler = async (req, res) => {
+    const expiryParam = req.query.expiry;
+    const forceZeroParam = String(req.query.forceZero || "").toLowerCase();
+    const forceZero = forceZeroParam === "true";
+
+    if (!expiryParam || typeof expiryParam !== "string" || !expiryParam.trim()) {
+      res.status(400).json({
+        error:
+          "Query param 'expiry' is required. Example: /api/futstk/ohlc/refresh?expiry=2025-10-28",
+      });
+      return;
+    }
+
+    try {
+      const summary = await refreshAndUpsertFutstkOhlc(expiryParam, forceZero);
+      res.json({ expiry: expiryParam, forceZero, ...summary });
+    } catch (err: any) {
+      console.error("FUTSTK OHLC (refresh) route error:", err?.message || err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  };
+
+  /**
+   * Debug single SID quickly:
    * GET /api/futstk/ohlc/debug?sid=52509
-   * - Quick probe to see if OHLC responds for a single id
-   * - Does not write to DB
    */
   const debugHandler: RequestHandler = async (req, res) => {
     const sidParam = req.query.sid;
@@ -51,6 +86,7 @@ export default function registerFutstkOhlcRoutes(app: Express) {
     }
   };
 
-  app.get("/api/futstk/ohlc", handler);
+  app.get("/api/futstk/ohlc", insertHandler);          // one-shot insert (legacy + ticks)
+  app.get("/api/futstk/ohlc/refresh", refreshHandler); // upsert/refresh (+ ticks)
   app.get("/api/futstk/ohlc/debug", debugHandler);
 }
