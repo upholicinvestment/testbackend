@@ -1,6 +1,7 @@
-// src/controllers/gex_cache.controller.ts
+// server/src/controllers/gex_cache.controller.ts
 import type { Request, Response } from "express";
 import type { Db, WithId, Document, Collection } from "mongodb";
+import crypto from "crypto";
 import { computeGexFromCachedDoc } from "../utils/gex_from_cache";
 
 let db: Db | undefined;
@@ -159,6 +160,23 @@ function istTodayBoundsUTC() {
   return { startUTC, endUTC, ymd };
 }
 
+/* helper: today or "since X minutes" */
+function istTodayBoundsUTC_orSince(scope: string, sinceMin: number) {
+  if (scope === "since") {
+    const endUTC = new Date();
+    const startUTC = new Date(endUTC.getTime() - Math.max(1, sinceMin) * 60_000);
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const ymd = fmt.format(new Date());
+    return { startUTC, endUTC, ymd };
+  }
+  return istTodayBoundsUTC();
+}
+
 function ticksFilter(
   securityId: number,
   seg: string,
@@ -281,9 +299,6 @@ export const getNiftyGexFromCache: any = async (req: Request, res: Response) => 
 
 /* ────────────────────────────────────────────────────────────
  *  GET /api/gex/nifty/ticks?expiry=YYYY-MM-DD[&fmt=candles&tf=1m]
- *  → All of *today’s* NIFTY prices from option_chain_ticks with time
- *    - fmt=line (default): { points: [{x:ms, y:price}], count }
- *    - fmt=candles&tf=1m: { candles: [{x:ms, y:[o,h,l,c]}], tf:"1m" }
  * ──────────────────────────────────────────────────────────── */
 export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
   try {
@@ -313,7 +328,6 @@ export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
     const fmt = String(req.query.fmt || "line");   // "line" | "candles"
     const tf = String(req.query.tf || "1m");       // for candles: only 1m supported here
 
-    // Pull all ticks for today (lean projection)
     const raw = await ticksColl.find(filter, {
       sort: { ts: 1, _id: 1 },
       projection: { last_price: 1, ts: 1 },
@@ -333,7 +347,6 @@ export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
 
     if (fmt === "candles") {
       if (tf !== "1m") return res.status(400).json({ error: "ONLY_1M_SUPPORTED" });
-      // bucket by minute
       const bucketMs = 60_000;
       const map = new Map<number, { o: number; h: number; l: number; c: number }>();
       for (const t of raw) {
@@ -364,7 +377,6 @@ export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
       });
     }
 
-    // default: line points
     const points = raw
       .map((r) => ({ x: new Date(r.ts as any as string).getTime(), y: Number((r as any).last_price) }))
       .filter((p) => Number.isFinite(p.y));
@@ -401,7 +413,7 @@ export const listNiftyCacheExpiries: any = async (_req: Request, res: Response) 
 };
 
 /* ────────────────────────────────────────────────────────────
- *  GET /api/gex/cache/debug
+ *  Debug
  * ──────────────────────────────────────────────────────────── */
 export const optionChainDebugSummary: any = async (_req: Request, res: Response) => {
   try {
@@ -449,5 +461,188 @@ export const optionChainDebugSummary: any = async (_req: Request, res: Response)
     return res.json({ collection_count: count, latest_samples: sample, variants });
   } catch (e: any) {
     return res.status(500).json({ error: "OC_DEBUG_FAILED", detail: String(e?.message || e) });
+  }
+};
+
+/* ────────────────────────────────────────────────────────────
+ *  NEW: GET /api/gex/nifty/bulk?expiry=YYYY-MM-DD&scope=today
+ *       opt: &scope=since&sinceMin=1440
+ *  → returns { day, gex:{...rows...}, ticks:{...points...} } with ETag
+ * ──────────────────────────────────────────────────────────── */
+type OcRowsCacheDoc = {
+  key: string;
+  symbol: string;
+  expiry: string;
+  rows: ReturnType<typeof computeGexFromCachedDoc>["rows"];
+  lot_size: number;
+  total_gex_oi_raw: number;
+  total_gex_vol_raw: number;
+  total_gex_oi: number;
+  total_gex_vol: number;
+  zero_gamma_oi: number | null;
+  zero_gamma_vol: number | null;
+  source_updated_at?: Date | string;
+  updated_at: Date;
+};
+
+function buildETag(identity: unknown) {
+  const b = JSON.stringify(identity);
+  return `"gexbulk-${crypto.createHash("md5").update(b).digest("hex")}"`;
+}
+
+async function getOrBuildOcRowsCache(
+  _db: Db,
+  securityId: number,
+  seg: string,
+  symbol: string,
+  expiryISO: string
+) {
+  const cache = _db.collection<OcRowsCacheDoc>("oc_rows_cache");
+  const oc = _db.collection("option_chain");
+
+  const key = `${symbol}|${expiryISO}`;
+
+  const latestSrc = await oc.findOne(
+    { $and: [looseByIdSegSym(securityId, seg, symbol), expiryClause(expiryISO)] },
+    { sort: { updated_at: -1, _id: -1 }, projection: { updated_at: 1 } }
+  );
+  const srcUpdatedAt = (latestSrc as any)?.updated_at;
+
+  const cached = await cache.findOne({ key });
+
+  const cacheStale =
+    !cached ||
+    (srcUpdatedAt &&
+      new Date(cached.source_updated_at as any).getTime() <
+        new Date(srcUpdatedAt as any).getTime());
+
+  if (!cacheStale) {
+    return { cached, rebuilt: false };
+  }
+
+  const collOC = oc;
+  const loose = looseByIdSegSym(securityId, seg, symbol);
+  const full = await collOC.findOne(
+    { $and: [loose, expiryClause(expiryISO)] },
+    { sort: { updated_at: -1, _id: -1 } }
+  );
+  if (!full) return { cached: null, rebuilt: false };
+
+  const lot = await getLotSize(_db, securityId, seg);
+  const computed = computeGexFromCachedDoc(full as any, lot);
+
+  const doc: OcRowsCacheDoc = {
+    key,
+    symbol,
+    expiry: expiryISO,
+    rows: computed.rows,
+    lot_size: computed.lot_size,
+    total_gex_oi_raw: computed.total_gex_oi_raw,
+    total_gex_vol_raw: computed.total_gex_vol_raw,
+    total_gex_oi: computed.total_gex_oi,
+    total_gex_vol: computed.total_gex_vol,
+    zero_gamma_oi: computed.zero_gamma_oi,
+    zero_gamma_vol: computed.zero_gamma_vol,
+    source_updated_at: (full as any).updated_at,
+    updated_at: new Date(),
+  };
+
+  await cache.updateOne({ key }, { $set: doc }, { upsert: true });
+  return { cached: doc, rebuilt: true };
+}
+
+export const getNiftyGexBulk: any = async (req: Request, res: Response) => {
+  try {
+    const securityId = envInt("NIFTY_SECURITY_ID", 13);
+    const seg = process.env.NIFTY_UNDERLYING_SEG || "IDX_I";
+    const symbol = process.env.NIFTY_SYMBOL || "NIFTY";
+    const expiryReq = (req.query.expiry as string | undefined)?.slice(0, 10) || null;
+
+    const collOC = requireDb().collection("option_chain");
+    const loose = looseByIdSegSym(securityId, seg, symbol);
+
+    let expiryISO = expiryReq;
+    if (!expiryISO) {
+      const exps = await listDistinctExpiries(collOC, loose);
+      const todayISO = new Date().toISOString().slice(0, 10);
+      const picked = pickNearestOrLatest(exps, todayISO);
+      if (!picked) return res.status(404).json({ error: "NO_EXPIRY_AVAILABLE" });
+      expiryISO = picked;
+    }
+
+    const scope = String(req.query.scope || "today");
+    const sinceMin = Math.max(1, parseInt(String(req.query.sinceMin || "1440"), 10) || 1440);
+    const { startUTC, endUTC, ymd } = istTodayBoundsUTC_orSince(scope, sinceMin);
+
+    // rows (via oc_rows_cache)
+    const { cached } = await getOrBuildOcRowsCache(requireDb(), securityId, seg, symbol, expiryISO!);
+    if (!cached) return res.status(404).json({ error: "ROWS_CACHE_EMPTY" });
+
+    // spot (latest)
+    const live = await fetchSpotFromTicks(requireDb(), securityId, seg, symbol, expiryISO!);
+    const spot = live.spot ?? 0;
+
+    // ticks within window
+    const ticksColl = requireDb().collection("option_chain_ticks");
+    const filter = ticksFilter(securityId, seg, symbol, expiryISO!, startUTC, endUTC);
+    const rawTicks = await ticksColl
+      .find(filter, { sort: { ts: 1, _id: 1 }, projection: { last_price: 1, ts: 1 } })
+      .toArray();
+    const points = rawTicks
+      .map((r) => ({ x: new Date((r as any).ts).getTime(), y: Number((r as any).last_price) }))
+      .filter((p) => Number.isFinite(p.y));
+
+    const gexPayload = {
+      symbol,
+      expiry: expiryISO,
+      spot: spot || 0,
+      rows: cached.rows,
+      updated_at: cached.source_updated_at,
+      lot_size: cached.lot_size,
+      totals: {
+        gex_oi_raw: cached.total_gex_oi_raw,
+        gex_vol_raw: cached.total_gex_vol_raw,
+        gex_oi: cached.total_gex_oi,
+        gex_vol: cached.total_gex_vol,
+      },
+      zero_gamma_oi: cached.zero_gamma_oi,
+      zero_gamma_vol: cached.zero_gamma_vol,
+    };
+
+    const ticksPayload = {
+      symbol,
+      expiry: expiryISO,
+      trading_day_ist: ymd,
+      from: startUTC.toISOString(),
+      to: endUTC.toISOString(),
+      points,
+      count: points.length,
+    };
+
+    const lastTick = points.length ? points[points.length - 1].x : 0;
+    const identity = {
+      day: ymd,
+      expiry: expiryISO,
+      rowsN: cached.rows.length,
+      rowsU: cached.updated_at,
+      tickN: points.length,
+      lastTick,
+      spot,
+    };
+    const etag = buildETag(identity);
+
+    const inm = req.headers["if-none-match"];
+    if (inm && inm === etag) {
+      res.status(304).end();
+      return;
+    }
+
+    res.setHeader("ETag", etag);
+    res.setHeader("X-GEX-Day", ymd);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ day: ymd, gex: gexPayload, ticks: ticksPayload });
+  } catch (e: any) {
+    console.error("[getNiftyGexBulk]", e?.message || e);
+    return res.status(500).json({ error: "GEX_BULK_FAILED", detail: String(e?.message || e) });
   }
 };

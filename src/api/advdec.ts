@@ -5,7 +5,7 @@ import crypto from "crypto";
 
 /* ---------- Helpers ---------- */
 
-// IST label for a Date
+// Label in IST for chart
 function labelIST(d: Date): string {
   return d.toLocaleTimeString("en-IN", {
     hour: "2-digit",
@@ -15,8 +15,22 @@ function labelIST(d: Date): string {
   });
 }
 
-function minutesAgoDate(min: number): Date {
-  return new Date(Date.now() - Math.max(1, Math.floor(min)) * 60_000);
+// YYYY-MM-DD (IST)
+function dayISTString(d = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+// Today’s trading window in IST (returns UTC instants)
+function istTradingBounds(d = new Date()) {
+  const day = dayISTString(d);
+  const start = new Date(`${day}T09:15:00+05:30`);
+  const end   = new Date(`${day}T15:30:00+05:30`);
+  return { start, end, day };
 }
 
 /** Build an ETag string from a simple identity summary */
@@ -26,21 +40,22 @@ function buildETag(identity: unknown) {
 }
 
 /**
- * Run aggregation for a single bin size. The logic:
- *  - Filter FUTSTK (optionally a single expiry)
- *  - Restrict to received_at >= cutoff
- *  - Truncate to IST "slots" using $dateTrunc with binSize
- *  - For each (slot, security_id) keep the latest tick
- *  - Group by slot to count advances/declines
- *  - Sort by slot ascending
+ * Aggregate one series for a given bin within [start,end) (UTC instants), IST truncation.
+ * - Filters only today’s session window by received_at.
+ * - Truncates to IST slots via $dateTrunc with binSize.
+ * - Keeps latest per (slot, security_id), then counts adv/dec.
  */
-async function fetchSeriesForBin(db: Db, binSize: number, sinceMin: number, expiry?: string) {
-  const cutoff = minutesAgoDate(sinceMin);
-
+async function fetchSeriesForBin(
+  db: Db,
+  binSize: number,
+  start: Date,
+  end: Date,
+  expiry?: string
+) {
   const baseMatch: Record<string, any> = {
     instrument_type: "FUTSTK",
     exchange: "NSE_FNO",
-    received_at: { $gte: cutoff },
+    received_at: { $gte: start, $lt: end },
   };
   if (expiry) baseMatch.expiry_date = expiry;
 
@@ -102,7 +117,10 @@ async function fetchSeriesForBin(db: Db, binSize: number, sinceMin: number, expi
     },
   ];
 
-  const docs = await db.collection("nse_futstk_ticks").aggregate(pipeline, { allowDiskUse: true }).toArray();
+  const docs = await db
+    .collection("nse_futstk_ticks")
+    .aggregate(pipeline, { allowDiskUse: true })
+    .toArray();
 
   const series = docs.map((d) => {
     const ts = new Date(d._id);
@@ -124,29 +142,52 @@ async function fetchSeriesForBin(db: Db, binSize: number, sinceMin: number, expi
 }
 
 /* ========================================================================== */
-/*                            ROUTES (default + bulk)                          */
+/*                                   ROUTES                                   */
 /* ========================================================================== */
 
 export function AdvDec(app: Express, db: Db) {
   /**
-   * Legacy/simple endpoint (kept for compatibility):
+   * Legacy/simple endpoint (compat):
    * GET /api/advdec?bin=5&expiry=YYYY-MM-DD
-   * Returns { current, chartData } for ONE bin only.
+   * NEW default: clamps to *today’s IST trading window*.
+   * You may opt-out with ?scope=since&sinceMin=1440 (kept for rare use).
    */
   app.get("/api/advdec", async (req: Request, res: Response): Promise<void> => {
     try {
       const binSize = Math.max(1, Number(req.query.bin) || 5);
-      const sinceMin = Math.max(1, Number(req.query.sinceMin) || 1440); // 24h backfill by default
       const expiryParam =
         typeof req.query.expiry === "string" && req.query.expiry.trim()
           ? req.query.expiry.trim()
           : undefined;
 
-      const { series, current } = await fetchSeriesForBin(db, binSize, sinceMin, expiryParam);
+      const scope = String(req.query.scope || "today"); // "today" (default) | "since"
+      let start: Date, end: Date, day: string;
+
+      if (scope === "since") {
+        // opt-out path: rolling window (kept for debugging; not recommended for UI)
+        const sinceMin = Math.max(1, Number(req.query.sinceMin) || 1440);
+        start = new Date(Date.now() - sinceMin * 60_000);
+        end = new Date();
+        day = dayISTString(); // just a label; may cross midnight
+      } else {
+        const b = istTradingBounds();
+        start = b.start; end = b.end; day = b.day;
+      }
+
+      const { series, current } = await fetchSeriesForBin(db, binSize, start, end, expiryParam);
+
+      res.setHeader("X-AdvDec-Day", day);
       res.setHeader("Cache-Control", "no-store");
       res.json({
+        day,
         current,
-        chartData: series.map(({ time, advances, declines }) => ({ time, advances, declines })),
+        chartData: series.map(({ time, advances, declines, timestamp, total }) => ({
+          ts: timestamp,
+          time,
+          advances,
+          declines,
+          total,
+        })),
       });
     } catch (err) {
       console.error("Error in /api/advdec:", err);
@@ -158,9 +199,9 @@ export function AdvDec(app: Express, db: Db) {
   });
 
   /**
-   * NEW: Bulk endpoint with ETag + 24h backfill:
-   * GET /api/advdec/bulk?intervals=3,5,15,30&sinceMin=1440&expiry=YYYY-MM-DD
-   * Returns rows for ALL requested bins in a single payload.
+   * Bulk + ETag + today’s session window by default
+   * GET /api/advdec/bulk?intervals=3,5,15,30&expiry=YYYY-MM-DD
+   * Opt-out window with ?scope=since&sinceMin=1440
    */
   app.get("/api/advdec/bulk", async (req: Request, res: Response): Promise<void> => {
     try {
@@ -170,13 +211,24 @@ export function AdvDec(app: Express, db: Db) {
         .filter((n) => [1, 3, 5, 10, 15, 30, 60].includes(n));
       const intervals = raw.length ? Array.from(new Set(raw)).sort((a, b) => a - b) : [5];
 
-      const sinceMin = Math.max(1, Number(req.query.sinceMin) || 1440); // default 24h
       const expiryParam =
         typeof req.query.expiry === "string" && req.query.expiry.trim()
           ? req.query.expiry.trim()
           : undefined;
 
-      // Run per interval; small number (e.g. 3-4) is fine.
+      const scope = String(req.query.scope || "today"); // "today" (default) | "since"
+      let start: Date, end: Date, day: string;
+
+      if (scope === "since") {
+        const sinceMin = Math.max(1, Number(req.query.sinceMin) || 1440);
+        start = new Date(Date.now() - sinceMin * 60_000);
+        end = new Date();
+        day = dayISTString();
+      } else {
+        const b = istTradingBounds();
+        start = b.start; end = b.end; day = b.day;
+      }
+
       const rows: Record<
         string,
         Array<{ timestamp: string; time: string; advances: number; declines: number; total: number }>
@@ -185,20 +237,22 @@ export function AdvDec(app: Express, db: Db) {
       let current = { advances: 0, declines: 0, total: 0 };
 
       for (const m of intervals) {
-        const { series, current: cur, lastSlotISO } = await fetchSeriesForBin(db, m, sinceMin, expiryParam);
+        const { series, current: cur, lastSlotISO } = await fetchSeriesForBin(
+          db, m, start, end, expiryParam
+        );
         rows[String(m)] = series;
         if (!lastISO || (lastSlotISO && lastSlotISO > lastISO)) lastISO = lastSlotISO;
-        // For a representative "current", prefer the smallest bin if present
         if (m === Math.min(...intervals)) current = cur;
       }
 
-      // ETag: identity depends on last slot + counts/lengths across all intervals
+      // Build ETag including day + sizes + last slot
       const identity = {
+        day,
         lastISO,
         keys: Object.fromEntries(Object.entries(rows).map(([k, v]) => [k, v.length])),
         cur: current,
         expiry: expiryParam || null,
-        sinceMin,
+        scope,
       };
       const etag = buildETag(identity);
 
@@ -209,8 +263,9 @@ export function AdvDec(app: Express, db: Db) {
       }
 
       res.setHeader("ETag", etag);
+      res.setHeader("X-AdvDec-Day", day);
       res.setHeader("Cache-Control", "no-store");
-      res.json({ current, rows, lastISO });
+      res.json({ day, current, rows, lastISO });
     } catch (err) {
       console.error("Error in /api/advdec/bulk:", err);
       res.status(500).json({

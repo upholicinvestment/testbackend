@@ -41,7 +41,39 @@ function detectStrikeStep(rows: StrikeRow[]): number {
 
 const roundToStep = (px: number, step: number) => Math.round(px / step) * step;
 const minutesToMs = (min: number) => Math.max(1, Math.floor(min)) * 60 * 1000;
-const binKey = (ts: Date, binMs: number) => Math.floor(ts.getTime() / binMs) * binMs;
+
+// ----- IST + session-anchored bucketing (anchor = 09:15 IST) -----
+const IST_OFFSET_MIN = 330; // +05:30
+const IST_OFFSET_MS = IST_OFFSET_MIN * 60_000;
+const DAY_MS = 86_400_000;
+const SESSION_START_MIN = 9 * 60 + 15; // 09:15 IST
+
+function istDayStartMs(utcMs: number) {
+  const istMs = utcMs + IST_OFFSET_MS;
+  return Math.floor(istMs / DAY_MS) * DAY_MS;
+}
+
+function floorToSessionBucketStartUTC(dUTC: Date, intervalMin: number): Date {
+  const intervalMs = Math.max(1, intervalMin) * 60_000;
+  const utcMs = dUTC.getTime();
+  const dayStartIst = istDayStartMs(utcMs);
+  const sessionAnchorIst = dayStartIst + SESSION_START_MIN * 60_000;
+  const istNow = utcMs + IST_OFFSET_MS;
+  const k = Math.floor((istNow - sessionAnchorIst) / intervalMs);
+  const startIst = sessionAnchorIst + k * intervalMs;
+  return new Date(startIst - IST_OFFSET_MS);
+}
+
+function ceilToSessionBucketEndUTC(dUTC: Date, intervalMin: number): Date {
+  const intervalMs = Math.max(1, intervalMin) * 60_000;
+  const utcMs = dUTC.getTime();
+  const dayStartIst = istDayStartMs(utcMs);
+  const sessionAnchorIst = dayStartIst + SESSION_START_MIN * 60_000;
+  const istNow = utcMs + IST_OFFSET_MS;
+  const k = Math.ceil((istNow - sessionAnchorIst) / intervalMs);
+  const endIst = sessionAnchorIst + k * intervalMs;
+  return new Date(endIst - IST_OFFSET_MS);
+}
 
 // IST-aligned “trading day” window derived from a UTC timestamp
 function tradingWindowBySinceMin(latestTs: Date, sinceMin: number): { start: Date; end: Date } {
@@ -55,7 +87,7 @@ function tradingWindowBySinceMin(latestTs: Date, sinceMin: number): { start: Dat
 export default function registerNiftyRoutes(app: Express, db: Db) {
   const ticksCol = db.collection<TickDoc>("option_chain_ticks");
 
-  /** ============= Existing: Fixed ATM endpoint ============= */
+  /** ============= Fixed ATM endpoint ============= */
   const atmHandler: RequestHandler = async (req: Request, res: Response): Promise<void> => {
     try {
       const intervalMin = Math.max(1, parseInt(String(req.query.interval || "3"), 10));
@@ -101,15 +133,16 @@ export default function registerNiftyRoutes(app: Express, db: Db) {
       const fixedAtm = roundToStep(latest.last_price, step);
       log("ATM window (fixed)", { expiry: latest.expiry, step, fixedAtm, start: toISO(start), end: toISO(end) });
 
-      const binMs = minutesToMs(intervalMin);
-      type AtmBin = { ts: Date; callOI: number; putOI: number };
+      type AtmBin = { ts: Date; callOI: number; putOI: number }; // ts = BUCKET END (UTC)
       const bins = new Map<number, AtmBin>();
 
       let lastCE = 0;
       let lastPE = 0;
 
       for (const doc of docs) {
-        const key = binKey(new Date(doc.ts), binMs);
+        const startUTC = floorToSessionBucketStartUTC(new Date(doc.ts), intervalMin);
+        const endUTC = ceilToSessionBucketEndUTC(new Date(doc.ts), intervalMin);
+        const key = startUTC.getTime();
 
         let ceOI = lastCE;
         let peOI = lastPE;
@@ -126,13 +159,13 @@ export default function registerNiftyRoutes(app: Express, db: Db) {
 
         lastCE = ceOI;
         lastPE = peOI;
-        bins.set(key, { ts: new Date(key), callOI: ceOI, putOI: peOI });
+        bins.set(key, { ts: endUTC, callOI: ceOI, putOI: peOI });
       }
 
       const series = Array.from(bins.entries())
         .sort((a, b) => a[0] - b[0])
         .map(([, v]) => ({
-          timestamp: v.ts.toISOString(),
+          timestamp: v.ts.toISOString(), // bucket END
           atmStrike: fixedAtm,
           callOI: v.callOI,
           putOI: v.putOI,
@@ -145,7 +178,7 @@ export default function registerNiftyRoutes(app: Express, db: Db) {
     }
   };
 
-  /** ============= Existing: OVERALL endpoint ============= */
+  /** ============= OVERALL endpoint ============= */
   const overallHandler: RequestHandler = async (req: Request, res: Response): Promise<void> => {
     try {
       const intervalMin = Math.max(1, parseInt(String(req.query.interval || "3"), 10));
@@ -183,16 +216,19 @@ export default function registerNiftyRoutes(app: Express, db: Db) {
         return;
       }
 
-      const binMs = minutesToMs(intervalMin);
-      type TotalBin = { ts: Date; callOI: number; putOI: number };
+      type TotalBin = { ts: Date; callOI: number; putOI: number }; // ts = BUCKET END (UTC)
       const bins = new Map<number, TotalBin>();
 
       for (const doc of docs) {
-        const key = binKey(new Date(doc.ts), binMs);
+        const startUTC = floorToSessionBucketStartUTC(new Date(doc.ts), intervalMin);
+        const endUTC = ceilToSessionBucketEndUTC(new Date(doc.ts), intervalMin);
+        const key = startUTC.getTime();
+
         const strikes = Array.isArray(doc.strikes) ? (doc.strikes as StrikeRow[]) : [];
         const sumCE = strikes.reduce<number>((acc, r) => acc + (Number(r?.ce?.oi ?? 0) || 0), 0);
         const sumPE = strikes.reduce<number>((acc, r) => acc + (Number(r?.pe?.oi ?? 0) || 0), 0);
-        bins.set(key, { ts: new Date(key), callOI: sumCE, putOI: sumPE });
+
+        bins.set(key, { ts: endUTC, callOI: sumCE, putOI: sumPE });
       }
 
       const step = (() => {
@@ -203,7 +239,7 @@ export default function registerNiftyRoutes(app: Express, db: Db) {
       const series = Array.from(bins.entries())
         .sort((a, b) => a[0] - b[0])
         .map(([, v]) => ({
-          timestamp: v.ts.toISOString(),
+          timestamp: v.ts.toISOString(), // bucket END
           callOI: v.callOI,
           putOI: v.putOI,
         }));
@@ -215,7 +251,7 @@ export default function registerNiftyRoutes(app: Express, db: Db) {
     }
   };
 
-  /** ============= NEW: BULK endpoint (ETag + 24h backfill) ============= */
+  /** ============= BULK endpoint (ETag + 24h backfill) ============= */
   const bulkHandler: RequestHandler = async (req: Request, res: Response): Promise<void> => {
     try {
       const id = Number(process.env.OC_UNDERLYING_ID ?? 13);
@@ -271,17 +307,17 @@ export default function registerNiftyRoutes(app: Express, db: Db) {
       }
       const fixedAtm = roundToStep(latest.last_price, step);
 
-      // Build per-interval bins
       type Pt = { timestamp: string; callOI: number; putOI: number };
 
       const buildAtmSeries = (binMin: number): Pt[] => {
-        const binMs = minutesToMs(binMin);
         const bins = new Map<number, { ts: Date; callOI: number; putOI: number }>();
         let lastCE = 0;
         let lastPE = 0;
 
         for (const doc of docs) {
-          const key = binKey(new Date(doc.ts), binMs);
+          const startUTC = floorToSessionBucketStartUTC(new Date(doc.ts), binMin);
+          const endUTC = ceilToSessionBucketEndUTC(new Date(doc.ts), binMin);
+          const key = startUTC.getTime();
 
           let ce = lastCE;
           let pe = lastPE;
@@ -297,29 +333,31 @@ export default function registerNiftyRoutes(app: Express, db: Db) {
           }
           lastCE = ce;
           lastPE = pe;
-          bins.set(key, { ts: new Date(key), callOI: ce, putOI: pe });
+          bins.set(key, { ts: endUTC, callOI: ce, putOI: pe });
         }
 
         return Array.from(bins.entries())
           .sort((a, b) => a[0] - b[0])
-          .map(([, v]) => ({ timestamp: v.ts.toISOString(), callOI: v.callOI, putOI: v.putOI }));
+          .map(([, v]) => ({ timestamp: v.ts.toISOString(), callOI: v.callOI, putOI: v.putOI })); // bucket END
       };
 
       const buildOverallSeries = (binMin: number): Pt[] => {
-        const binMs = minutesToMs(binMin);
         const bins = new Map<number, { ts: Date; callOI: number; putOI: number }>();
 
         for (const doc of docs) {
-          const key = binKey(new Date(doc.ts), binMs);
+          const startUTC = floorToSessionBucketStartUTC(new Date(doc.ts), binMin);
+          const endUTC = ceilToSessionBucketEndUTC(new Date(doc.ts), binMin);
+          const key = startUTC.getTime();
+
           const strikes = Array.isArray(doc.strikes) ? (doc.strikes as StrikeRow[]) : [];
           const sumCE = strikes.reduce<number>((acc, r) => acc + (Number(r?.ce?.oi ?? 0) || 0), 0);
           const sumPE = strikes.reduce<number>((acc, r) => acc + (Number(r?.pe?.oi ?? 0) || 0), 0);
-          bins.set(key, { ts: new Date(key), callOI: sumCE, putOI: sumPE });
+          bins.set(key, { ts: endUTC, callOI: sumCE, putOI: sumPE });
         }
 
         return Array.from(bins.entries())
           .sort((a, b) => a[0] - b[0])
-          .map(([, v]) => ({ timestamp: v.ts.toISOString(), callOI: v.callOI, putOI: v.putOI }));
+          .map(([, v]) => ({ timestamp: v.ts.toISOString(), callOI: v.callOI, putOI: v.putOI })); // bucket END
       };
 
       const atmRows: Record<string, Pt[]> = {};
@@ -361,5 +399,5 @@ export default function registerNiftyRoutes(app: Express, db: Db) {
 
   app.get("/api/nifty/atm", atmHandler);          // kept for backward-compat
   app.get("/api/nifty/overall", overallHandler);  // kept for backward-compat
-  app.get("/api/oi/bulk", bulkHandler);           // NEW: bulk + ETag + 24h
+  app.get("/api/oi/bulk", bulkHandler);           // bulk + ETag + 24h
 }

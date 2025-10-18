@@ -1,4 +1,3 @@
-// src/api/heatmap.ts
 import { Express, Request, Response } from "express";
 import { Db } from "mongodb";
 import crypto from "crypto";
@@ -24,19 +23,11 @@ function buildETag(identity: unknown) {
 }
 
 const securities: { name: string; security_id: number; sector: string }[] = [
-  {
-    name: "SAMMAANCAP OCT FUT",
-    security_id: 49082,
-    sector: "Financial Services",
-  },
+  { name: "SAMMAANCAP OCT FUT", security_id: 49082, sector: "Financial Services" },
   { name: "POWERINDIA OCT FUT", security_id: 49974, sector: "Capital Goods" },
   { name: "360ONE OCT FUT", security_id: 52170, sector: "Financial Services" },
   { name: "ABB OCT FUT", security_id: 52171, sector: "Capital Goods" },
-  {
-    name: "ABCAPITAL OCT FUT",
-    security_id: 52172,
-    sector: "Financial Services",
-  },
+  { name: "ABCAPITAL OCT FUT", security_id: 52172, sector: "Financial Services" },
   { name: "ADANIENSOL OCT FUT", security_id: 52173, sector: "Utilities" },
   { name: "ADANIENT OCT FUT", security_id: 52174, sector: "Conglomerate" },
   { name: "ADANIGREEN OCT FUT", security_id: 52175, sector: "Utilities" },
@@ -44,11 +35,7 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "ALKEM OCT FUT", security_id: 52177, sector: "Pharmaceuticals" },
   { name: "AMBER OCT FUT", security_id: 52178, sector: "Chemicals" },
   { name: "AMBUJACEM OCT FUT", security_id: 52179, sector: "Cement" },
-  {
-    name: "ANGELONE OCT FUT",
-    security_id: 52200,
-    sector: "Financial Services",
-  },
+  { name: "ANGELONE OCT FUT", security_id: 52200, sector: "Financial Services" },
   { name: "APLAPOLLO OCT FUT", security_id: 52201, sector: "Metals" },
   { name: "APOLLOHOSP OCT FUT", security_id: 52214, sector: "Healthcare" },
   { name: "ASHOKLEY OCT FUT", security_id: 52215, sector: "Automotive" },
@@ -58,16 +45,8 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "AUROPHARMA OCT FUT", security_id: 52219, sector: "Pharmaceuticals" },
   { name: "AXISBANK OCT FUT", security_id: 52223, sector: "Banking" },
   { name: "BAJAJ-AUTO OCT FUT", security_id: 52224, sector: "Automotive" },
-  {
-    name: "BAJAJFINSV OCT FUT",
-    security_id: 52240,
-    sector: "Financial Services",
-  },
-  {
-    name: "BAJFINANCE OCT FUT",
-    security_id: 52241,
-    sector: "Financial Services",
-  },
+  { name: "BAJAJFINSV OCT FUT", security_id: 52240, sector: "Financial Services" },
+  { name: "BAJFINANCE OCT FUT", security_id: 52241, sector: "Financial Services" },
   { name: "BANDHANBNK OCT FUT", security_id: 52255, sector: "Banking" },
   { name: "BANKBARODA OCT FUT", security_id: 52256, sector: "Banking" },
   { name: "BANKINDIA OCT FUT", security_id: 52266, sector: "Banking" },
@@ -77,11 +56,7 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "BHARTIARTL OCT FUT", security_id: 52276, sector: "Telecom" },
   { name: "BHEL OCT FUT", security_id: 52277, sector: "Capital Goods" },
   { name: "BIOCON OCT FUT", security_id: 52288, sector: "Pharmaceuticals" },
-  {
-    name: "BLUESTARCO OCT FUT",
-    security_id: 52289,
-    sector: "Consumer Durables",
-  },
+  { name: "BLUESTARCO OCT FUT", security_id: 52289, sector: "Consumer Durables" },
   { name: "BOSCHLTD OCT FUT", security_id: 52290, sector: "Automotive" },
   { name: "BPCL OCT FUT", security_id: 52291, sector: "Oil & Gas" },
   { name: "BRITANNIA OCT FUT", security_id: 52292, sector: "FMCG" },
@@ -90,11 +65,7 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "CANBK OCT FUT", security_id: 52303, sector: "Banking" },
   { name: "CDSL OCT FUT", security_id: 52304, sector: "Financial Services" },
   { name: "CGPOWER OCT FUT", security_id: 52305, sector: "Capital Goods" },
-  {
-    name: "CHOLAFIN OCT FUT",
-    security_id: 52306,
-    sector: "Financial Services",
-  },
+  { name: "CHOLAFIN OCT FUT", security_id: 52306, sector: "Financial Services" },
   { name: "CIPLA OCT FUT", security_id: 52307, sector: "Pharmaceuticals" },
   { name: "COALINDIA OCT FUT", security_id: 52308, sector: "Metals" },
   { name: "COFORGE OCT FUT", security_id: 52309, sector: "IT" },
@@ -159,27 +130,15 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "JIOFIN OCT FUT", security_id: 52418, sector: "Financial Services" },
   { name: "JSWENERGY OCT FUT", security_id: 52419, sector: "Utilities" },
   { name: "JSWSTEEL OCT FUT", security_id: 52422, sector: "Metals" },
-  {
-    name: "JUBLFOOD OCT FUT",
-    security_id: 52423,
-    sector: "Quick Service Restaurant",
-  },
+  { name: "JUBLFOOD OCT FUT", security_id: 52423, sector: "Quick Service Restaurant" },
   { name: "KALYANKJIL OCT FUT", security_id: 52424, sector: "Retail" },
   { name: "KAYNES OCT FUT", security_id: 52425, sector: "IT" },
   { name: "KEI OCT FUT", security_id: 52428, sector: "Capital Goods" },
-  {
-    name: "KFINTECH OCT FUT",
-    security_id: 52429,
-    sector: "Financial Services",
-  },
+  { name: "KFINTECH OCT FUT", security_id: 52429, sector: "Financial Services" },
   { name: "KOTAKBANK OCT FUT", security_id: 52430, sector: "Banking" },
   { name: "KPITTECH OCT FUT", security_id: 52431, sector: "IT" },
   { name: "LAURUSLABS OCT FUT", security_id: 52432, sector: "Pharmaceuticals" },
-  {
-    name: "LICHSGFIN OCT FUT",
-    security_id: 52433,
-    sector: "Financial Services",
-  },
+  { name: "LICHSGFIN OCT FUT", security_id: 52433, sector: "Financial Services" },
   { name: "LICI OCT FUT", security_id: 52434, sector: "Insurance" },
   { name: "LODHA OCT FUT", security_id: 52441, sector: "Real Estate" },
   { name: "LT OCT FUT", security_id: 52442, sector: "Infrastructure" },
@@ -187,11 +146,7 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "LTIM OCT FUT", security_id: 52444, sector: "IT" },
   { name: "LUPIN OCT FUT", security_id: 52445, sector: "Pharmaceuticals" },
   { name: "M&M OCT FUT", security_id: 52446, sector: "Automotive" },
-  {
-    name: "MANAPPURAM OCT FUT",
-    security_id: 52448,
-    sector: "Financial Services",
-  },
+  { name: "MANAPPURAM OCT FUT", security_id: 52448, sector: "Financial Services" },
   { name: "MANKIND OCT FUT", security_id: 52449, sector: "Pharmaceuticals" },
   { name: "MARICO OCT FUT", security_id: 52453, sector: "FMCG" },
   { name: "MARUTI OCT FUT", security_id: 52454, sector: "Automotive" },
@@ -201,11 +156,7 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "MFSL OCT FUT", security_id: 52458, sector: "Insurance" },
   { name: "MOTHERSON OCT FUT", security_id: 52459, sector: "Automotive" },
   { name: "MPHASIS OCT FUT", security_id: 52460, sector: "IT" },
-  {
-    name: "MUTHOOTFIN OCT FUT",
-    security_id: 52461,
-    sector: "Financial Services",
-  },
+  { name: "MUTHOOTFIN OCT FUT", security_id: 52461, sector: "Financial Services" },
   { name: "NATIONALUM OCT FUT", security_id: 52462, sector: "Metals" },
   { name: "NAUKRI OCT FUT", security_id: 52463, sector: "IT" },
   { name: "NBCC OCT FUT", security_id: 52464, sector: "Construction" },
@@ -231,11 +182,7 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "PIDILITIND OCT FUT", security_id: 52498, sector: "Chemicals" },
   { name: "PIIND OCT FUT", security_id: 52499, sector: "Chemicals" },
   { name: "PNB OCT FUT", security_id: 52500, sector: "Banking" },
-  {
-    name: "PNBHOUSING OCT FUT",
-    security_id: 52501,
-    sector: "Financial Services",
-  },
+  { name: "PNBHOUSING OCT FUT", security_id: 52501, sector: "Financial Services" },
   { name: "POLICYBZR OCT FUT", security_id: 52502, sector: "IT" },
   { name: "POLYCAB OCT FUT", security_id: 52503, sector: "Capital Goods" },
   { name: "POWERGRID OCT FUT", security_id: 52504, sector: "Utilities" },
@@ -250,21 +197,13 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "SBILIFE OCT FUT", security_id: 52513, sector: "Insurance" },
   { name: "SBIN OCT FUT", security_id: 52514, sector: "Banking" },
   { name: "SHREECEM OCT FUT", security_id: 52515, sector: "Cement" },
-  {
-    name: "SHRIRAMFIN OCT FUT",
-    security_id: 52516,
-    sector: "Financial Services",
-  },
+  { name: "SHRIRAMFIN OCT FUT", security_id: 52516, sector: "Financial Services" },
   { name: "SIEMENS OCT FUT", security_id: 52517, sector: "Capital Goods" },
   { name: "SOLARINDS OCT FUT", security_id: 52518, sector: "Chemicals" },
   { name: "SONACOMS OCT FUT", security_id: 52519, sector: "Automotive" },
   { name: "SRF OCT FUT", security_id: 52520, sector: "Chemicals" },
   { name: "SUNPHARMA OCT FUT", security_id: 52521, sector: "Pharmaceuticals" },
-  {
-    name: "SUPREMEIND OCT FUT",
-    security_id: 52522,
-    sector: "Consumer Durables",
-  },
+  { name: "SUPREMEIND OCT FUT", security_id: 52522, sector: "Consumer Durables" },
   { name: "SUZLON OCT FUT", security_id: 52525, sector: "Capital Goods" },
   { name: "SYNGENE OCT FUT", security_id: 52526, sector: "Pharmaceuticals" },
   { name: "TATACONSUM OCT FUT", security_id: 52527, sector: "FMCG" },
@@ -277,11 +216,7 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "TECHM OCT FUT", security_id: 52542, sector: "IT" },
   { name: "TIINDIA OCT FUT", security_id: 52543, sector: "Automotive" },
   { name: "TITAGARH OCT FUT", security_id: 52544, sector: "Capital Goods" },
-  {
-    name: "TITAN OCT FUT",
-    security_id: 52545,
-    sector: "Consumer Discretionary",
-  },
+  { name: "TITAN OCT FUT", security_id: 52545, sector: "Consumer Discretionary" },
   { name: "TORNTPHARM OCT FUT", security_id: 52548, sector: "Pharmaceuticals" },
   { name: "TORNTPOWER OCT FUT", security_id: 52549, sector: "Utilities" },
   { name: "TRENT OCT FUT", security_id: 52555, sector: "Retail" },
@@ -301,6 +236,16 @@ const securities: { name: string; security_id: number; sector: string }[] = [
 
 export function Heatmap(app: Express, db: Db) {
   const collection = db.collection("nse_futstk_ohlc");
+
+  // Indexes to make sort+group fast (doesn't alter logic)
+  (async () => {
+    try {
+      await collection.createIndex({ security_id: 1, received_at: -1 });
+      await collection.createIndex({ received_at: -1 });
+    } catch (e) {
+      console.warn("[heatmap] index creation warning:", (e as Error)?.message || e);
+    }
+  })();
 
   const securityIdMap = new Map<number, SecurityMeta>();
   const securityIds: number[] = [];
@@ -334,9 +279,7 @@ export function Heatmap(app: Express, db: Db) {
       },
     ];
 
-    const items = await collection
-      .aggregate(pipeline, { allowDiskUse: true })
-      .toArray();
+    const items = await collection.aggregate(pipeline, { allowDiskUse: true }).toArray();
 
     const processed: StockData[] = items.map((item: any) => {
       const securityId = Number(item.security_id);
@@ -345,11 +288,7 @@ export function Heatmap(app: Express, db: Db) {
       const ltp = parseFloat(item.LTP ?? "0");
       const close = parseFloat(item.close ?? "0");
       const change =
-        ltp &&
-        close &&
-        !Number.isNaN(ltp) &&
-        !Number.isNaN(close) &&
-        close !== 0
+        ltp && close && !Number.isNaN(ltp) && !Number.isNaN(close) && close !== 0
           ? ((ltp - close) / close) * 100
           : undefined;
 
@@ -361,9 +300,7 @@ export function Heatmap(app: Express, db: Db) {
         sector: meta?.sector ?? "Unknown",
         security_id: securityId,
         change,
-        received_at: item.received_at
-          ? new Date(item.received_at).toISOString()
-          : undefined,
+        received_at: item.received_at ? new Date(item.received_at).toISOString() : undefined,
       };
     });
 
@@ -377,29 +314,22 @@ export function Heatmap(app: Express, db: Db) {
       if (Number.isFinite(l)) sumL += l;
       if (Number.isFinite(c)) sumC += c;
       const t = it.received_at ? new Date(it.received_at).getTime() : 0;
-      if (!lastISO || (t && t > new Date(lastISO).getTime()))
+      if (!lastISO || (t && (!lastISO || t > new Date(lastISO).getTime()))) {
         lastISO = it.received_at!;
+      }
     }
 
-    return {
-      processed,
-      lastISO,
-      sumL: Math.round(sumL),
-      sumC: Math.round(sumC),
-    };
+    return { processed, lastISO, sumL: Math.round(sumL), sumC: Math.round(sumC) };
   }
 
   /**
-   * Legacy/simple endpoint (kept): GET /api/heatmap
+   * Legacy/simple endpoint: GET /api/heatmap
    * Returns array of stocks (latest per security). 60s cache headers.
    */
   app.get("/api/heatmap", async (_req: Request, res: Response) => {
     try {
       const { processed } = await latestPerSecurity(1440); // 24h cutoff by default
-      res.setHeader(
-        "Cache-Control",
-        "public, max-age=60, stale-while-revalidate=30"
-      );
+      res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=30");
       res.setHeader("Vary", "Accept-Encoding");
       res.json(processed);
     } catch (error) {
@@ -412,16 +342,14 @@ export function Heatmap(app: Express, db: Db) {
   });
 
   /**
-   * NEW: Bulk + ETag + 24h backfill by default
+   * Bulk + ETag + 24h backfill by default
    * GET /api/heatmap/bulk?sinceMin=1440
    * Response: { stocks: StockData[], lastISO: string|null }
    */
   app.get("/api/heatmap/bulk", async (req: Request, res: Response) => {
     try {
       const sinceMin = Math.max(1, Number(req.query.sinceMin) || 1440);
-      const { processed, lastISO, sumL, sumC } = await latestPerSecurity(
-        sinceMin
-      );
+      const { processed, lastISO, sumL, sumC } = await latestPerSecurity(sinceMin);
 
       const identity = { cnt: processed.length, lastISO, sumL, sumC, sinceMin };
       const etag = buildETag(identity);

@@ -1,4 +1,4 @@
-// src/services/oc_signal.ts
+//oc_signal.ts
 import { MongoClient, ObjectId } from "mongodb";
 
 /* ========= Types ========= */
@@ -16,23 +16,27 @@ export type OptionChainDoc = {
   spot?: number;                   // preferred
   strikes?: Strike[];
   updated_at?: Date | string;      // in snapshot coll
-  ts?: Date;                       // in ticks coll
+  ts?: Date;                       // in ticks coll (UTC)
 };
 
 export type DecisionRow = {
   volatility: number;           // in chosen unit
-  time: string;                 // HH:MM:SS IST
+  time: string;                 // HH:MM:SS IST (bucket END)
   signal: "Bullish" | "Bearish";
   spot: number;
 };
 
 export type DecisionRowOut = DecisionRow & {
-  // no liquidity fields exposed
   moveClass?: "Big Upside" | "Big Downside" | "Small Upside" | "Small Downside";
   pointsHint?: "300-400" | "100-200";
 };
 
-/* ========= Helpers ========= */
+/* ========= Time & bucket helpers (IST, session anchored at 09:15) ========= */
+const IST_OFFSET_MIN = 330; // +05:30
+const IST_OFFSET_MS = IST_OFFSET_MIN * 60_000;
+const DAY_MS = 86_400_000;
+const SESSION_START_MIN = 9 * 60 + 15; // 09:15 IST
+
 function timeIST(d: Date): string {
   return new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata",
@@ -42,6 +46,32 @@ function timeIST(d: Date): string {
     second: "2-digit",
   }).format(d);
 }
+function istDayStartMs(utcMs: number) {
+  const istMs = utcMs + IST_OFFSET_MS;
+  return Math.floor(istMs / DAY_MS) * DAY_MS;
+}
+function floorToSessionBucketStartUTC(dUTC: Date, intervalMin: number): Date {
+  const intervalMs = Math.max(1, intervalMin) * 60_000;
+  const utcMs = dUTC.getTime();
+  const dayStartIst = istDayStartMs(utcMs);
+  const sessionAnchorIst = dayStartIst + SESSION_START_MIN * 60_000;
+  const istNow = utcMs + IST_OFFSET_MS;
+  const k = Math.floor((istNow - sessionAnchorIst) / intervalMs);
+  const startIst = sessionAnchorIst + k * intervalMs;
+  return new Date(startIst - IST_OFFSET_MS);
+}
+function ceilToSessionBucketEndUTC(dUTC: Date, intervalMin: number): Date {
+  const intervalMs = Math.max(1, intervalMin) * 60_000;
+  const utcMs = dUTC.getTime();
+  const dayStartIst = istDayStartMs(utcMs);
+  const sessionAnchorIst = dayStartIst + SESSION_START_MIN * 60_000;
+  const istNow = utcMs + IST_OFFSET_MS;
+  const k = Math.ceil((istNow - sessionAnchorIst) / intervalMs);
+  const endIst = sessionAnchorIst + k * intervalMs;
+  return new Date(endIst - IST_OFFSET_MS);
+}
+
+/* ========= Signals ========= */
 function gaussianWeight(k: number, spot: number, width = 300): number {
   const d = k - spot;
   return Math.exp(-(d * d) / (2 * width * width));
@@ -60,8 +90,6 @@ function detectStrikeStep(strikes: Strike[]): number {
 function roundToStep(price: number, step: number): number {
   return Math.round(price / step) * step;
 }
-
-/* ========= Signals ========= */
 function signalFromPrice(prevSpot: number, spot: number): "Bullish" | "Bearish" {
   return spot >= prevSpot ? "Bullish" : "Bearish";
 }
@@ -78,20 +106,13 @@ function signalFromWeightedDelta(strikes: Strike[] = [], spot: number): "Bullish
   return net >= 0 ? "Bullish" : "Bearish";
 }
 
-/** Convert spot move to desired unit:
- *  - "pct"    => percent (e.g., -0.08)
- *  - "bps"    => basis points (percent * 100) (e.g., -8.00)
- *  - "points" => raw points (e.g., -20.5)
- */
+/** Convert spot move to desired unit */
 function volatilityValue(prevSpot: number | undefined, spot: number, unit: "bps"|"pct"|"points" = "bps"): number {
   if (!prevSpot || prevSpot <= 0) return 0;
   const diff = spot - prevSpot;
-
   if (unit === "points") return Number(diff.toFixed(2));
-
   const pct = (diff / prevSpot) * 100;
   if (unit === "pct") return Number(pct.toFixed(2));
-
   const bps = pct * 100;
   return Number(bps.toFixed(2));
 }
@@ -180,12 +201,6 @@ async function getRecentTicks(
   return docs as OptionChainDoc[];
 }
 
-/* ========= Bucketing ========= */
-function floorToBucket(d: Date, minutes: number): number {
-  const ms = minutes * 60 * 1000;
-  return Math.floor(d.getTime() / ms) * ms;
-}
-
 /* ========= Public APIs ========= */
 export async function computeRowsFromDBWindow(
   mongoUri: string,
@@ -222,11 +237,12 @@ export async function computeRowsFromDBWindow(
     // Oldest -> newest for bucketing
     const ticksAsc = [...ticksDesc].reverse();
 
-    // 1) Bucket by intervalMin, keep LAST tick in each bucket
+    // 1) Bucket by intervalMin (session-anchored), keep LAST tick in each bucket
     const byBucket = new Map<number, OptionChainDoc>();
     for (const t of ticksAsc) {
       const ts = (t.ts instanceof Date) ? t.ts : new Date();
-      const key = floorToBucket(ts, intervalMin);
+      const startUTC = floorToSessionBucketStartUTC(ts, intervalMin);
+      const key = startUTC.getTime();
       const prev = byBucket.get(key);
       if (!prev || (prev.ts instanceof Date && ts > prev.ts)) {
         byBucket.set(key, t);
@@ -246,7 +262,11 @@ export async function computeRowsFromDBWindow(
 
       const spot = Number(curr.spot ?? curr.last_price ?? 0);
       const prevSpot = Number(prev?.spot ?? prev?.last_price ?? 0);
-      const time = timeIST(curr.ts instanceof Date ? curr.ts : new Date());
+
+      // Label with session-anchored BUCKET END (ceil from curr ts)
+      const currTs = (curr.ts instanceof Date) ? curr.ts : new Date();
+      const labelEndUTC = ceilToSessionBucketEndUTC(currTs, intervalMin);
+      const time = timeIST(labelEndUTC);
 
       const volDisplay = volatilityValue(prevSpot, spot, unit);
       const volBps = volatilityValue(prevSpot, spot, "bps");
