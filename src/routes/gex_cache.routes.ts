@@ -4,8 +4,7 @@ import {
   getNiftyGexFromCache,
   listNiftyCacheExpiries,
   optionChainDebugSummary,
-  getNiftyTicksToday,
-  getNiftyGexBulk, // <-- added
+  getNiftyTicksToday
 } from "../controllers/gex_cache.controller";
 
 const r = Router();
@@ -13,7 +12,6 @@ const r = Router();
 r.get("/gex/nifty/cache", getNiftyGexFromCache);
 r.get("/gex/nifty/cache/expiries", listNiftyCacheExpiries);
 r.get("/gex/cache/debug", optionChainDebugSummary);
-r.get("/gex/nifty/ticks", getNiftyTicksToday);
-r.get("/gex/nifty/bulk", getNiftyGexBulk); // <-- added
+r.get("/gex/nifty/ticks", getNiftyTicksToday); // <-- new
 
 export default r;

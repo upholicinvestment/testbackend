@@ -1,4 +1,3 @@
-//oc_rowa_bulk.api.ts
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Db } from "mongodb";
 import crypto from "crypto";
@@ -13,8 +12,8 @@ type CacheDoc = {
   intervalMin: number;
   mode: "level" | "delta";
   unit: "bps" | "pct" | "points";
-  tsBucket: Date;           // cached bucket timestamp (start or end; label is recomputed)
-  time: string;             // stored human-readable (not trusted for output)
+  tsBucket: Date;           // bucket START in UTC
+  time: string;             // (stored) human readable, but we will recompute
   volatility: number;
   signal: "Bullish" | "Bearish";
   spot: number;
@@ -29,12 +28,7 @@ type RowOut = Pick<
 const CACHE_COLL = "oc_rows_cache";
 const TICKS_COLL = process.env.OC_SOURCE_COLL || "option_chain_ticks";
 
-/* ---- Time helpers (IST, session anchored at 09:15) ---- */
-const IST_OFFSET_MIN = 330; // +05:30
-const IST_OFFSET_MS = IST_OFFSET_MIN * 60_000;
-const DAY_MS = 86_400_000;
-const SESSION_START_MIN = 9 * 60 + 15; // 09:15 IST
-
+// ---- IST formatting helpers ----
 const dtfIST = new Intl.DateTimeFormat("en-IN", {
   timeZone: "Asia/Kolkata",
   hour12: false,
@@ -44,21 +38,6 @@ const dtfIST = new Intl.DateTimeFormat("en-IN", {
 });
 function timeIST(d: Date) {
   return dtfIST.format(d) + " IST";
-}
-
-function istDayStartMs(utcMs: number) {
-  const istMs = utcMs + IST_OFFSET_MS;
-  return Math.floor(istMs / DAY_MS) * DAY_MS;
-}
-function ceilToSessionBucketEndUTC(dUTC: Date, intervalMin: number): Date {
-  const intervalMs = Math.max(1, intervalMin) * 60_000;
-  const utcMs = dUTC.getTime();
-  const dayStartIst = istDayStartMs(utcMs);
-  const sessionAnchorIst = dayStartIst + SESSION_START_MIN * 60_000;
-  const istNow = utcMs + IST_OFFSET_MS;
-  const k = Math.ceil((istNow - sessionAnchorIst) / intervalMs);
-  const endIst = sessionAnchorIst + k * intervalMs;
-  return new Date(endIst - IST_OFFSET_MS);
 }
 
 /** Resolve active expiry from latest option_chain or ticks */
@@ -184,10 +163,10 @@ export default function registerOcRowsBulk(app: Express, db: Db) {
               } as any)
               .project({
                 volatility: 1,
-                time: 1,          // stored, but we recompute label below
+                time: 1,          // stored, but we will recompute a proper label
                 signal: 1,
                 spot: 1,
-                tsBucket: 1,      // recompute label using session-anchored end
+                tsBucket: 1,
                 updated_at: 1,
                 _id: 0,
               } as any)
@@ -218,20 +197,18 @@ export default function registerOcRowsBulk(app: Express, db: Db) {
         res.setHeader("ETag", etag);
         res.setHeader("X-Resolved-Expiry", expiry);
 
-        // Shape rows for client: label with session-anchored BUCKET END (09:15 IST anchor)
+        // Shape rows for client: label by IST-aligned BUCKET END
         const rows = Object.fromEntries(
           Object.entries(byInterval).map(([k, v]) => {
             const intervalMin = Number(k);
             return [
               k,
               v.map((d) => {
-                const bucketEndUTC = ceilToSessionBucketEndUTC(
-                  new Date(d.tsBucket as unknown as Date),
-                  intervalMin
-                );
+                const bucketStart = new Date(d.tsBucket as unknown as Date);
+                const bucketEnd = new Date(bucketStart.getTime() + intervalMin * 60_000);
                 return {
                   volatility: d.volatility,
-                  time: timeIST(bucketEndUTC),
+                  time: timeIST(bucketEnd),  // <<< correct label
                   signal: d.signal,
                   spot: d.spot,
                 };
