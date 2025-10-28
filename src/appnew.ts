@@ -115,6 +115,10 @@ import { AdvDecSave, startAdvDecMinuteJob } from "./api/advdecSave";
 /* ---------- OTP in-memory store (for /api/ads OTP check) ---------- */
 import { otpStore } from "./controllers/otp_send.controller";
 
+import gexBulkRouter from "./routes/gex_bulk.routes";
+import { setGexBulkDb } from "./controllers/gex_bulk.controller";
+
+
 dotenv.config();
 
 /* ====================================================================== */
@@ -537,6 +541,7 @@ const connectDB = async () => {
     setUserDatabase(db);
     setRequireEntitlementDb(db);
     setGexCacheDb(db);
+    setGexBulkDb(db);
 
     GexLevelsCalc(app, db);
     startGexLevelsEveryMinute(db);
@@ -624,9 +629,16 @@ const connectDB = async () => {
       );
     }
 
-    // Mount GEX cache router (canonical + alias)
-    app.use("/api", gexCacheRouter); // /api/gex/nifty/cache
-    app.use("/", gexCacheRouter); // /gex/nifty/cache
+// ======== PUBLIC routers (no JWT) ========
+
+// Existing GEX cache/ticks (already public)
+app.use("/api", gexCacheRouter);
+app.use("/", gexCacheRouter);
+
+// NEW: Public bulk (cache + ticks) endpoint
+app.use("/api", gexBulkRouter);     // <- this is the route your client calls
+app.use("/", gexBulkRouter);        // optional alias
+
 
     await ensureCalendarIndexes(db).catch(() => {});
 
@@ -758,9 +770,9 @@ const connectDB = async () => {
     app.use("/api/main-fii-dii", requireEntitlement("fii_dii_data"));
 
     // ✅ Call these register functions directly (do NOT pass them to app.use)
-    registerTradeJournalRoutes(app, db);
-    registerDailyJournalRoutes(app, db);
-    registerTradeCalendarRoutes(app, db);
+    registerTradeJournalRoutes(db);
+    registerDailyJournalRoutes(db);
+    registerTradeCalendarRoutes(db);
 
     app.use("/api/users", userRoutes);
     app.use("/api", routes);

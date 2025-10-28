@@ -1,4 +1,3 @@
-//oc_signal.ts
 import { MongoClient, ObjectId } from "mongodb";
 
 /* ========= Types ========= */
@@ -11,17 +10,17 @@ export type OptionChainDoc = {
   underlying_symbol?: string;
   underlying_segment?: string;
   underlying_security_id?: number;
-  expiry?: string;                 // "YYYY-MM-DD"
-  last_price?: number;             // spot fallback
-  spot?: number;                   // preferred
+  expiry?: string; // "YYYY-MM-DD"
+  last_price?: number;
+  spot?: number;
   strikes?: Strike[];
-  updated_at?: Date | string;      // in snapshot coll
-  ts?: Date;                       // in ticks coll (UTC)
+  updated_at?: Date | string;
+  ts?: Date;
 };
 
 export type DecisionRow = {
-  volatility: number;           // in chosen unit
-  time: string;                 // HH:MM:SS IST (bucket END)
+  volatility: number;
+  time: string;
   signal: "Bullish" | "Bearish";
   spot: number;
 };
@@ -31,12 +30,14 @@ export type DecisionRowOut = DecisionRow & {
   pointsHint?: "300-400" | "100-200";
 };
 
-/* ========= Time & bucket helpers (IST, session anchored at 09:15) ========= */
+/* ========= Constants ========= */
 const IST_OFFSET_MIN = 330; // +05:30
 const IST_OFFSET_MS = IST_OFFSET_MIN * 60_000;
-const DAY_MS = 86_400_000;
 const SESSION_START_MIN = 9 * 60 + 15; // 09:15 IST
+const SESSION_END_MIN = 15 * 60 + 30;  // 15:30 IST
+const DAY_MS = 86_400_000;
 
+/* ========= Time Helpers ========= */
 function timeIST(d: Date): string {
   return new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata",
@@ -46,29 +47,29 @@ function timeIST(d: Date): string {
     second: "2-digit",
   }).format(d);
 }
+
 function istDayStartMs(utcMs: number) {
   const istMs = utcMs + IST_OFFSET_MS;
   return Math.floor(istMs / DAY_MS) * DAY_MS;
 }
-function floorToSessionBucketStartUTC(dUTC: Date, intervalMin: number): Date {
-  const intervalMs = Math.max(1, intervalMin) * 60_000;
-  const utcMs = dUTC.getTime();
-  const dayStartIst = istDayStartMs(utcMs);
-  const sessionAnchorIst = dayStartIst + SESSION_START_MIN * 60_000;
-  const istNow = utcMs + IST_OFFSET_MS;
-  const k = Math.floor((istNow - sessionAnchorIst) / intervalMs);
-  const startIst = sessionAnchorIst + k * intervalMs;
-  return new Date(startIst - IST_OFFSET_MS);
-}
-function ceilToSessionBucketEndUTC(dUTC: Date, intervalMin: number): Date {
-  const intervalMs = Math.max(1, intervalMin) * 60_000;
-  const utcMs = dUTC.getTime();
-  const dayStartIst = istDayStartMs(utcMs);
-  const sessionAnchorIst = dayStartIst + SESSION_START_MIN * 60_000;
-  const istNow = utcMs + IST_OFFSET_MS;
-  const k = Math.ceil((istNow - sessionAnchorIst) / intervalMs);
-  const endIst = sessionAnchorIst + k * intervalMs;
-  return new Date(endIst - IST_OFFSET_MS);
+
+/** Build fixed 09:15–15:30 IST grid in UTC for given interval */
+function buildSessionBucketsUTC(intervalMin: number): { start: Date; end: Date }[] {
+  const intervalMs = intervalMin * 60_000;
+  const now = new Date();
+  const utcMs = now.getTime();
+  const istDayStart = istDayStartMs(utcMs);
+
+  const startIst = istDayStart + SESSION_START_MIN * 60_000;
+  const endIst   = istDayStart + SESSION_END_MIN   * 60_000;
+
+  const buckets: { start: Date; end: Date }[] = [];
+  for (let t = startIst; t < endIst; t += intervalMs) {
+    const s = t;
+    const e = Math.min(t + intervalMs, endIst); // clamp to 15:30
+    buckets.push({ start: new Date(s - IST_OFFSET_MS), end: new Date(e - IST_OFFSET_MS) });
+  }
+  return buckets;
 }
 
 /* ========= Signals ========= */
@@ -77,7 +78,7 @@ function gaussianWeight(k: number, spot: number, width = 300): number {
   return Math.exp(-(d * d) / (2 * width * width));
 }
 function detectStrikeStep(strikes: Strike[]): number {
-  const vals = Array.from(new Set(strikes.map(s => Number(s.strike))))
+  const vals = Array.from(new Set(strikes.map((s) => Number(s.strike))))
     .filter(Number.isFinite)
     .sort((a, b) => a - b);
   let step = 50;
@@ -99,15 +100,15 @@ function signalFromWeightedDelta(strikes: Strike[] = [], spot: number): "Bullish
     const w = gaussianWeight(Number(s.strike), spot, 300);
     const ceDelta = s.ce?.greeks?.delta ?? 0;
     const peDelta = s.pe?.greeks?.delta ?? 0;
-    const ceOI = s.ce?.oi ?? 0;
-    const peOI = s.pe?.oi ?? 0;
+    const ceOI    = s.ce?.oi ?? 0;
+    const peOI    = s.pe?.oi ?? 0;
     net += w * (ceDelta * ceOI + peDelta * peOI);
   }
   return net >= 0 ? "Bullish" : "Bearish";
 }
 
-/** Convert spot move to desired unit */
-function volatilityValue(prevSpot: number | undefined, spot: number, unit: "bps"|"pct"|"points" = "bps"): number {
+/* ========= Volatility ========= */
+function volatilityValue(prevSpot: number | undefined, spot: number, unit: "bps" | "pct" | "points" = "bps"): number {
   if (!prevSpot || prevSpot <= 0) return 0;
   const diff = spot - prevSpot;
   if (unit === "points") return Number(diff.toFixed(2));
@@ -117,7 +118,7 @@ function volatilityValue(prevSpot: number | undefined, spot: number, unit: "bps"
   return Number(bps.toFixed(2));
 }
 
-/* ========= Liquidity (internal only) ========= */
+/* ========= Liquidity ========= */
 function liquidityFromOIDelta(curr: Strike[] = [], prev: Strike[] = [], spot: number, width = 300) {
   const prevMap = new Map<number, Strike>();
   for (const p of prev) prevMap.set(Number(p.strike), p);
@@ -128,8 +129,8 @@ function liquidityFromOIDelta(curr: Strike[] = [], prev: Strike[] = [], spot: nu
     const w = gaussianWeight(k, spot, width);
     const p = prevMap.get(k);
 
-    const ceNow = s.ce?.oi ?? 0;
-    const peNow = s.pe?.oi ?? 0;
+    const ceNow  = s.ce?.oi ?? 0;
+    const peNow  = s.pe?.oi ?? 0;
     const cePrev = p?.ce?.oi ?? 0;
     const pePrev = p?.pe?.oi ?? 0;
 
@@ -143,11 +144,12 @@ function liquidityFromOIDelta(curr: Strike[] = [], prev: Strike[] = [], spot: nu
   if (total <= 0) return { liqCall: 0.5, liqPut: 0.5 };
   return { liqCall: ceSum / total, liqPut: peSum / total };
 }
+
 function liquidityFromOILevel(curr: Strike[] = [], spot: number, windowSteps = 5) {
   if (!curr.length) return { liqCall: 0.5, liqPut: 0.5 };
   const step = detectStrikeStep(curr);
-  const atm = roundToStep(spot, step);
-  const inside = curr.filter(s => Math.abs(Number(s.strike) - atm) <= windowSteps * step);
+  const atm  = roundToStep(spot, step);
+  const inside = curr.filter((s) => Math.abs(Number(s.strike) - atm) <= windowSteps * step);
 
   let ceSum = 0, peSum = 0;
   for (const s of inside) {
@@ -159,49 +161,32 @@ function liquidityFromOILevel(curr: Strike[] = [], spot: number, windowSteps = 5
   return { liqCall: ceSum / total, liqPut: peSum / total };
 }
 
-/* ========= Classifier (internal) ========= */
+/* ========= Classifier ========= */
+type MoveClass = DecisionRowOut["moveClass"];
+type PointsHint = DecisionRowOut["pointsHint"];
+
 function classifyMove(
   signal: "Bullish" | "Bearish",
   liqCall: number,
   liqPut: number,
   volatilityBps: number,
   bigThresholdBps = 10
-) {
+): { moveClass?: MoveClass; pointsHint?: PointsHint } {
   const liqSide = liqCall >= liqPut ? "Call" : "Put";
   const big = Math.abs(volatilityBps) >= bigThresholdBps;
-  const up = volatilityBps > 0;
+  const up  = volatilityBps > 0;
 
-  if (big && up && signal === "Bullish" && liqSide === "Call") {
-    return { moveClass: "Big Upside" as const, pointsHint: "300-400" as const };
-  }
-  if (big && !up && signal === "Bearish" && liqSide === "Put") {
-    return { moveClass: "Big Downside" as const, pointsHint: "300-400" as const };
-  }
-  if (!big && up && signal === "Bullish" && liqSide === "Put") {
-    return { moveClass: "Small Upside" as const, pointsHint: "100-200" as const };
-  }
-  if (!big && !up && signal === "Bearish" && liqSide === "Call") {
-    return { moveClass: "Small Downside" as const, pointsHint: "100-200" as const };
-  }
+  if (big && up   && signal === "Bullish" && liqSide === "Call") return { moveClass: "Big Upside",   pointsHint: "300-400" };
+  if (big && !up  && signal === "Bearish" && liqSide === "Put")  return { moveClass: "Big Downside", pointsHint: "300-400" };
+  if (!big && up  && signal === "Bullish" && liqSide === "Put")  return { moveClass: "Small Upside", pointsHint: "100-200" };
+  if (!big && !up && signal === "Bearish" && liqSide === "Call") return { moveClass: "Small Downside", pointsHint: "100-200" };
   return {};
 }
 
 /* ========= Mongo ========= */
 const SORT_SPEC: Record<string, 1 | -1> = { ts: -1, updated_at: -1, _id: -1 };
 
-async function getRecentTicks(
-  client: MongoClient,
-  dbName: string,
-  filter: { underlying_security_id: number; expiry: string },
-  limit: number
-): Promise<OptionChainDoc[]> {
-  const collName = process.env.OC_SOURCE_COLL || "option_chain_ticks";
-  const coll = client.db(dbName).collection<OptionChainDoc & { ts?: Date }>(collName);
-  const docs = await coll.find(filter as any).sort(SORT_SPEC).limit(limit).toArray();
-  return docs as OptionChainDoc[];
-}
-
-/* ========= Public APIs ========= */
+/* ========= Main Function ========= */
 export async function computeRowsFromDBWindow(
   mongoUri: string,
   dbName: string,
@@ -215,7 +200,7 @@ export async function computeRowsFromDBWindow(
     windowSteps?: number;
     width?: number;
     classify?: boolean;
-    intervalMin?: number; // default 3
+    intervalMin?: number;
   }
 ): Promise<DecisionRowOut[]> {
   const {
@@ -231,64 +216,57 @@ export async function computeRowsFromDBWindow(
   const client = new MongoClient(mongoUri);
   await client.connect();
   try {
-    const ticksDesc = await getRecentTicks(client, dbName, { underlying_security_id, expiry }, Math.max(2, limit + 1000));
-    if (ticksDesc.length < 2) return [];
+    const coll = client.db(dbName).collection<OptionChainDoc>(process.env.OC_SOURCE_COLL || "option_chain_ticks");
 
-    // Oldest -> newest for bucketing
-    const ticksAsc = [...ticksDesc].reverse();
+    // Canonical fixed session (09:15 → 15:30 IST)
+    const buckets = buildSessionBucketsUTC(intervalMin);
+    const sessionStart = buckets[0].start;
+    const sessionEnd   = buckets[buckets.length - 1].end;
 
-    // 1) Bucket by intervalMin (session-anchored), keep LAST tick in each bucket
-    const byBucket = new Map<number, OptionChainDoc>();
-    for (const t of ticksAsc) {
-      const ts = (t.ts instanceof Date) ? t.ts : new Date();
-      const startUTC = floorToSessionBucketStartUTC(ts, intervalMin);
-      const key = startUTC.getTime();
-      const prev = byBucket.get(key);
-      if (!prev || (prev.ts instanceof Date && ts > prev.ts)) {
-        byBucket.set(key, t);
-      }
-    }
+    const ticks = await coll
+      .find({ underlying_security_id, expiry, ts: { $gte: sessionStart, $lt: sessionEnd } })
+      .sort({ ts: 1 })
+      .toArray();
 
-    // 2) Ordered series (ASC)
-    const bucketKeys = [...byBucket.keys()].sort((a, b) => a - b);
-    const seriesAsc = bucketKeys.map(k => byBucket.get(k)!).filter(Boolean);
-    if (seriesAsc.length < 2) return [];
+    if (!ticks.length) return [];
 
-    // 3) Compute rows from consecutive buckets
-    const outAsc: DecisionRowOut[] = [];
-    for (let i = 1; i < seriesAsc.length; i++) {
-      const curr = seriesAsc[i];
-      const prev = seriesAsc[i - 1];
+    const out: DecisionRowOut[] = [];
+    let prevSpot: number | undefined;
 
-      const spot = Number(curr.spot ?? curr.last_price ?? 0);
-      const prevSpot = Number(prev?.spot ?? prev?.last_price ?? 0);
+    for (const { start, end } of buckets) {
+      const slice = ticks.filter((t) => {
+        const ts = t.ts instanceof Date ? t.ts : new Date(t.ts!);
+        return ts >= start && ts < end;
+      });
 
-      // Label with session-anchored BUCKET END (ceil from curr ts)
-      const currTs = (curr.ts instanceof Date) ? curr.ts : new Date();
-      const labelEndUTC = ceilToSessionBucketEndUTC(currTs, intervalMin);
-      const time = timeIST(labelEndUTC);
+      // Skip empty early candles until first tick exists
+      if (!slice.length && !prevSpot) continue;
+
+      const endMs = end.getTime();
+      const first = slice[0] || ticks.find((t) => new Date(t.ts!).getTime() < endMs)!;
+      const last  = slice[slice.length - 1] || first;
+
+      const spot = Number(last.spot ?? last.last_price ?? 0);
+      if (!prevSpot) prevSpot = Number(first.spot ?? first.last_price ?? spot);
 
       const volDisplay = volatilityValue(prevSpot, spot, unit);
-      const volBps = volatilityValue(prevSpot, spot, "bps");
+      const volBps     = volatilityValue(prevSpot, spot, "bps");
 
       let sig: "Bullish" | "Bearish" = signalFromPrice(prevSpot, spot);
-      if (signalMode === "delta") sig = signalFromWeightedDelta(curr.strikes ?? [], spot);
-      else if (signalMode === "hybrid") {
-        const dSig = signalFromWeightedDelta(curr.strikes ?? [], spot);
-        sig = dSig === sig ? sig : sig; // keep price if disagreement
+      if (signalMode === "delta") {
+        sig = signalFromWeightedDelta(last.strikes ?? [], spot);
+      } else if (signalMode === "hybrid") {
+        const dSig = signalFromWeightedDelta(last.strikes ?? [], spot);
+        if (dSig === sig) sig = dSig;
       }
 
-      // internal liquidity for classifier only
-      let liqCall = 0.5, liqPut = 0.5;
-      if (mode === "delta") {
-        const res = liquidityFromOIDelta(curr.strikes ?? [], prev.strikes ?? [], spot, width);
-        liqCall = res.liqCall; liqPut = res.liqPut;
-      } else {
-        const res = liquidityFromOILevel(curr.strikes ?? [], spot, windowSteps);
-        liqCall = res.liqCall; liqPut = res.liqPut;
-      }
+      const { liqCall, liqPut } =
+        mode === "delta"
+          ? liquidityFromOIDelta(last.strikes ?? [], first.strikes ?? [], spot, width)
+          : liquidityFromOILevel(last.strikes ?? [], spot, windowSteps);
 
-      const row: DecisionRowOut = { volatility: volDisplay, time, signal: sig, spot };
+      const labelTime = timeIST(end); // bucket END
+      const row: DecisionRowOut = { volatility: volDisplay, time: labelTime, signal: sig, spot };
 
       if (classify) {
         const c = classifyMove(sig, liqCall, liqPut, volBps);
@@ -296,16 +274,18 @@ export async function computeRowsFromDBWindow(
         row.pointsHint = c.pointsHint;
       }
 
-      outAsc.push(row);
+      out.push(row);
+      prevSpot = spot;
     }
 
-    // 4) return last N in DESC
-    return outAsc.slice(Math.max(0, outAsc.length - limit)).reverse();
+    // Return last N rows in DESC order
+    return out.slice(-limit).reverse();
   } finally {
     await client.close();
   }
 }
 
+/* ========= Single-row ========= */
 export async function computeRowFromDB(
   mongoUri: string,
   dbName: string,

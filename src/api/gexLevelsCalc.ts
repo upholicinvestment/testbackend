@@ -1,3 +1,5 @@
+// -----------------------------------------------------------------------------------------------------------
+
 // src/routes/gexLevelsCalc.ts
 import { Express, Request, Response } from "express";
 import { Db } from "mongodb";
@@ -5,7 +7,8 @@ import { Db } from "mongodb";
 // If you're not on Node 18+, uncomment the next line:
 // import fetch from "node-fetch";
 
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = "https://api.upholictech.com/api";
+// const API_BASE = "http://localhost:8000/api";
 
 /* ================== Types ================== */
 type GexRow = {
@@ -134,7 +137,10 @@ function pickZeroGammaStrike(rows: GexRow[], r1?: number, s1?: number): number |
 
 /* ================== Date helpers (IST + minute bucket) ================== */
 const IST_TZ = "Asia/Kolkata";
-function formatIst(now = new Date()): string {
+const ONE_MIN_MS = 60_000;
+
+// ✅ correct
+function formatIst(now: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: IST_TZ,
     day: "2-digit",
@@ -146,8 +152,47 @@ function formatIst(now = new Date()): string {
     hour12: false,
   }).format(now);
 }
+
 function minuteBucket(now = Date.now()): number {
   return Math.floor(now / 60000);
+}
+
+/** Extract IST parts we care about (weekday, hour, minute, second). */
+function getIstParts(d = new Date()): { weekday: string; hour: number; minute: number; second: number } {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: IST_TZ,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = p.value;
+  }
+  return {
+    weekday: map.weekday, // "Mon"..."Sun"
+    hour: Number(map.hour || 0),
+    minute: Number(map.minute || 0),
+    second: Number(map.second || 0),
+  };
+}
+
+/** Market window in minutes since midnight IST: 09:15 to 15:30 inclusive. */
+const MARKET_START_MIN = 9 * 60 + 15;  // 555
+const MARKET_END_MIN   = 15 * 60 + 30; // 930
+
+function isMarketOpenIst(d = new Date()): boolean {
+  const { weekday, hour, minute } = getIstParts(d);
+  const mins = hour * 60 + minute;
+  const isWeekday = weekday !== "Sat" && weekday !== "Sun";
+  return isWeekday && mins >= MARKET_START_MIN && mins <= MARKET_END_MIN;
+}
+
+function msUntilNextMinute(d = new Date()): number {
+  return ONE_MIN_MS - (d.getTime() % ONE_MIN_MS);
 }
 
 /* ================== Core compute+save ================== */
@@ -270,7 +315,6 @@ async function computeAndSaveSnapshot(db: Db, symbol = "NIFTY", explicitExpiry?:
   };
 
   // Save once per minute per trading day
-//   const coll = db.collection("gex_levels");
   let saved = false;
   try {
     await coll.insertOne(doc as any);
@@ -282,7 +326,7 @@ async function computeAndSaveSnapshot(db: Db, symbol = "NIFTY", explicitExpiry?:
   return { saved, doc };
 }
 
-/* ================== Route + Always-on 1-min runner ================== */
+/* ================== Route + 1-min runner ================== */
 export function GexLevelsCalc(app: Express, db: Db) {
   const coll = db.collection("gex_levels");
 
@@ -305,11 +349,13 @@ export function GexLevelsCalc(app: Express, db: Db) {
 }
 
 /**
- * Call this once at server startup to run forever every 1 minute.
+ * Call this once at server startup. It runs on the minute boundary,
+ * but only during IST market hours (Mon–Fri, 09:15–15:30).
+ *
  * Example:
  *   import { GexLevelsCalc, startGexLevelsEveryMinute } from "./routes/gexLevelsCalc";
  *   GexLevelsCalc(app, db);
- *   startGexLevelsEveryMinute(db); // <- starts the loop
+ *   startGexLevelsEveryMinute(db);
  */
 export function startGexLevelsEveryMinute(db: Db) {
   let running = false;
@@ -318,7 +364,11 @@ export function startGexLevelsEveryMinute(db: Db) {
     if (running) return;
     running = true;
     try {
-      await computeAndSaveSnapshot(db, "NIFTY"); // expiry auto-detected
+      if (isMarketOpenIst()) {
+        await computeAndSaveSnapshot(db, "NIFTY"); // expiry auto-detected
+      } else {
+        // outside market hours → skip
+      }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("[gex-levels-1m] error:", e);
@@ -327,7 +377,13 @@ export function startGexLevelsEveryMinute(db: Db) {
     }
   };
 
-  setInterval(tick, 60_000); // run every minute (no stop)
+  // Align to the next minute boundary, then run every minute.
+  const initialDelay = msUntilNextMinute();
+  setTimeout(() => {
+    tick(); // first run on the next minute
+    setInterval(tick, ONE_MIN_MS);
+  }, initialDelay);
+
   // eslint-disable-next-line no-console
-  console.log("[gex-levels-1m] started: saving every 60s, nonstop");
+  console.log("[gex-levels-1m] scheduled: runs every minute during 09:15–15:30 IST, Mon–Fri");
 }
