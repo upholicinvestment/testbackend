@@ -190,7 +190,31 @@ export default function registerOcRowsBulk(app: Express, db: Db) {
           return;
         }
 
-        const cutoff = new Date(Date.now() - Math.max(1, sinceMin) * 60_000);
+        // ---------------------------
+        // Cutoff logic (modified)
+        // - During market hours: preserve original sinceMin behavior
+        // - Outside market hours (before 09:15 IST or after 15:30 IST): expand to 24 hours
+        // ---------------------------
+        const MAX_LOOKBACK_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+        const nowUtc = new Date();
+        const nowIstMs = nowUtc.getTime() + IST_OFFSET_MS;
+        const istDayStart = istDayStartMs(nowUtc.getTime());
+        const sessionStartIst = istDayStart + SESSION_START_MIN * 60_000; // 09:15 IST
+        const sessionEndIst   = istDayStart + SESSION_END_MIN   * 60_000; // 15:30 IST
+
+        // Default (preserve existing behavior during market hours)
+        let cutoffMs = Date.now() - Math.max(1, sinceMin) * 60_000;
+
+        // If we're outside the trading session (after 15:30 IST or before 09:15 IST),
+        // expand the window to 24 hours so the UI keeps showing the last available data
+        // until new data arrives or the market re-opens.
+        if (nowIstMs >= sessionEndIst || nowIstMs < sessionStartIst) {
+          cutoffMs = Date.now() - MAX_LOOKBACK_MS;
+        }
+
+        const cutoff = new Date(cutoffMs);
+
         const coll = db.collection<CacheDoc>(CACHE_COLL);
 
         const byInterval: Record<string, RowOut[]> = {};

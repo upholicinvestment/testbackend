@@ -6,7 +6,7 @@ import {
   fetchOhlc,
 } from "../services/quote.service";
 
-export default function registerFutstkOhlcRoutes(app: Express) {
+export default function registerFutstkOhlcRoutes(app: Express, fnoDb: unknown) {
   /**
    * INSERT endpoint (one-shot):
    * GET /api/futstk/ohlc?expiry=2025-10-28

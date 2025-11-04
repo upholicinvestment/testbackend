@@ -159,15 +159,16 @@ export function AdvDec(app: Express, db: Db) {
 
   /**
    * NEW: Bulk endpoint with ETag + 24h backfill:
-   * GET /api/advdec/bulk?intervals=3,5,15,30&sinceMin=1440&expiry=YYYY-MM-DD
-   * Returns rows for ALL requested bins in a single payload.
+   * GET /api/advdec/bulk?intervals=5&sinceMin=1440&expiry=YYYY-MM-DD
+   * NOTE: This endpoint now only supports interval = 5 (minutes).
    */
   app.get("/api/advdec/bulk", async (req: Request, res: Response): Promise<void> => {
     try {
-      const raw = String(req.query.intervals ?? "3,5,15,30")
+      // Accept only interval 5. Default to [5].
+      const raw = String(req.query.intervals ?? "5")
         .split(",")
         .map((x) => Number(x.trim()))
-        .filter((n) => [1, 3, 5, 10, 15, 30, 60].includes(n));
+        .filter((n) => n === 5);
       const intervals = raw.length ? Array.from(new Set(raw)).sort((a, b) => a - b) : [5];
 
       const sinceMin = Math.max(1, Number(req.query.sinceMin) || 1440); // default 24h
@@ -176,7 +177,7 @@ export function AdvDec(app: Express, db: Db) {
           ? req.query.expiry.trim()
           : undefined;
 
-      // Run per interval; small number (e.g. 3-4) is fine.
+      // Run per interval; small number (here only 5) is fine.
       const rows: Record<
         string,
         Array<{ timestamp: string; time: string; advances: number; declines: number; total: number }>
