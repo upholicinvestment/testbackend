@@ -1,4 +1,4 @@
-// src/controllers/gex_bulk.rou.ts
+// src/controllers/gex_bulk.routes.ts
 import { Router } from "express";
 import { getNiftyGexBulk } from "../controllers/gex_bulk.controller";
 

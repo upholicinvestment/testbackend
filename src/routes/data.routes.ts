@@ -1,3 +1,4 @@
+//server/src/data.routes.ts 
 import { Router } from 'express';
 import { getData, getLatestData, createData } from '../controllers/data.controller';
 // import { authenticate } from '../middleware/auth.middleware'; // Commented out for now

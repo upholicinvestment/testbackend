@@ -14,7 +14,6 @@ const envInt = (k: string, def: number) => {
 };
 const clean = (s: string) => (s || "").trim();
 
-/* ───────── expiry & matching helpers ───────── */
 function expiryClause(expiryISO: string) {
   return {
     $or: [
@@ -159,6 +158,13 @@ function istTodayBoundsUTC() {
   return { startUTC, endUTC, ymd };
 }
 
+function istDayBoundsUTCFromYMD(ymd: string) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const startUTC = new Date(Date.UTC(y, m - 1, d, 3, 30, 0, 0));
+  const endUTCMarket = new Date(Date.UTC(y, m - 1, d, 10, 0, 0));
+  return { startUTC, endUTC: endUTCMarket, ymd };
+}
+
 function ticksFilter(
   securityId: number,
   seg: string,
@@ -174,6 +180,105 @@ function ticksFilter(
       { ts: { $gte: startUTC, $lte: endUTC } },
     ],
   };
+}
+
+/* Helpers for IST string conversions */
+function istYMDFromDate(d: Date) {
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" });
+  return fmt.format(d);
+}
+
+/**
+ * Try option_chain_ticks first; if missing, try to return full previous-day ticks.
+ * Additionally, if previous-day ticks are missing but option_chain has snapshot docs for that IST day,
+ * synthesize a time series from option_chain.updated_at (or ts) and last_price.
+ */
+async function fetchTicksPreferPreviousDay(
+  _db: Db,
+  securityId: number,
+  seg: string,
+  symbol: string,
+  expiryISO: string,
+  startUTC: Date,
+  endUTC: Date,
+  fallbackLimit = Number(process.env.GEX_FALLBACK_TICKS || "2000"),
+): Promise<{
+  rows: Document[];
+  fallbackType: "today" | "previous_day" | "previous_partial" | "synth_from_option_chain" | "none";
+  fallback_count?: number;
+  prev_day_ymd?: string;
+}> {
+  const ticksColl = _db.collection("option_chain_ticks");
+  // 1) today's window ticks
+  const baseFilter = {
+    $and: [
+      looseByIdSegSym(securityId, seg, symbol),
+      expiryClause(expiryISO),
+      { ts: { $gte: startUTC, $lte: endUTC } },
+    ],
+  };
+  const windowRows = await ticksColl.find(baseFilter, { sort: { ts: 1, _id: 1 }, projection: { last_price: 1, ts: 1 } }).toArray();
+  if (windowRows && windowRows.length) return { rows: windowRows, fallbackType: "today" };
+
+  // 2) latest ticks strictly before startUTC
+  const beforeFilter = {
+    $and: [
+      looseByIdSegSym(securityId, seg, symbol),
+      expiryClause(expiryISO),
+      { ts: { $lt: startUTC } },
+    ],
+  };
+  const prevPartial = await ticksColl.find(beforeFilter, { sort: { ts: -1, _id: -1 }, projection: { last_price: 1, ts: 1 }, limit: fallbackLimit }).toArray();
+  if (!prevPartial || !prevPartial.length) return { rows: [], fallbackType: "none" };
+
+  // Determine IST date of the latest previous tick
+  const latestPrev = prevPartial[0];
+  const latestPrevTs = new Date((latestPrev as any).ts);
+  const prevYmd = istYMDFromDate(latestPrevTs);
+
+  // Attempt to fetch full previous trading day window for prevYmd from ticks
+  const prevDayBounds = istDayBoundsUTCFromYMD(prevYmd);
+  const prevDayFilter = {
+    $and: [
+      looseByIdSegSym(securityId, seg, symbol),
+      expiryClause(expiryISO),
+      { ts: { $gte: prevDayBounds.startUTC, $lte: prevDayBounds.endUTC } },
+    ],
+  };
+  const prevDayRows = await ticksColl.find(prevDayFilter, { sort: { ts: 1, _id: 1 }, projection: { last_price: 1, ts: 1 } }).toArray();
+  if (prevDayRows && prevDayRows.length) {
+    return { rows: prevDayRows, fallbackType: "previous_day", prev_day_ymd: prevYmd, fallback_count: prevDayRows.length };
+  }
+
+  // 3) If no prev-day ticks, try to build series from option_chain snapshots for that prevYmd
+  const ocColl = _db.collection("option_chain");
+  // Pull candidate docs for expiry and symbol and then filter by updated_at within prevDayBounds in JS (safer for mixed types)
+  const ocCandidates = await ocColl.find({ $and: [ looseByIdSegSym(securityId, seg, symbol), expiryClause(expiryISO) ] })
+    .project({ last_price: 1, updated_at: 1, ts: 1 })
+    .sort({ updated_at: 1, ts: 1 })
+    .toArray();
+
+  const ocRows: { last_price: number; ts: string }[] = [];
+  for (const d of ocCandidates) {
+    const rawTs = (d as any).updated_at || (d as any).ts;
+    if (!rawTs) continue;
+    const dt = new Date(rawTs);
+    if (isNaN(dt.getTime())) continue;
+    if (dt >= prevDayBounds.startUTC && dt <= prevDayBounds.endUTC) {
+      const price = Number((d as any).last_price);
+      if (!Number.isFinite(price)) continue;
+      ocRows.push({ last_price: price, ts: dt.toISOString() });
+    }
+  }
+  if (ocRows.length) {
+    // ensure chronological
+    ocRows.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+    return { rows: ocRows as any as Document[], fallbackType: "synth_from_option_chain", prev_day_ymd: prevYmd, fallback_count: ocRows.length };
+  }
+
+  // 4) fallback to prevPartial (reverse chronological -> chronological)
+  prevPartial.reverse();
+  return { rows: prevPartial as Document[], fallbackType: "previous_partial", fallback_count: prevPartial.length };
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -284,6 +389,8 @@ export const getNiftyGexFromCache: any = async (req: Request, res: Response) => 
  *  → All of *today’s* NIFTY prices from option_chain_ticks with time
  *    - fmt=line (default): { points: [{x:ms, y:price}], count }
  *    - fmt=candles&tf=1m: { candles: [{x:ms, y:[o,h,l,c]}], tf:"1m" }
+ *  When ticks missing for today, will attempt previous-day ticks,
+ *  then previous-day synthesized series from option_chain, then partials, then single synthesized point.
  * ──────────────────────────────────────────────────────────── */
 export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
   try {
@@ -307,19 +414,40 @@ export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
 
     const { startUTC, endUTC, ymd } = istTodayBoundsUTC();
 
-    const ticksColl = requireDb().collection("option_chain_ticks");
-    const filter = ticksFilter(securityId, seg, symbol, expiryISO!, startUTC, endUTC);
-
     const fmt = String(req.query.fmt || "line");   // "line" | "candles"
     const tf = String(req.query.tf || "1m");       // for candles: only 1m supported here
 
-    // Pull all ticks for today (lean projection)
-    const raw = await ticksColl.find(filter, {
-      sort: { ts: 1, _id: 1 },
-      projection: { last_price: 1, ts: 1 },
-    }).toArray();
+    // fetch ticks with extended fallback (includes synthesizing from option_chain snapshots)
+    const result = await fetchTicksPreferPreviousDay(requireDb(), securityId, seg, symbol, expiryISO, startUTC, endUTC);
 
-    if (raw.length === 0) {
+    let rows = result.rows || [];
+    let points_source: string = "none";
+    if (result.fallbackType === "today") points_source = "today";
+    else if (result.fallbackType === "previous_day") points_source = "previous_day";
+    else if (result.fallbackType === "synth_from_option_chain") points_source = "previous_day_from_option_chain";
+    else if (result.fallbackType === "previous_partial") points_source = "previous_partial";
+    else points_source = "none";
+
+    // If still nothing, synthesize single point from option_chain.last_price (older behaviour)
+    let synthesized = false;
+    if ((!rows || rows.length === 0)) {
+      const doc = await collOC.findOne({ $and: [loose, expiryClause(expiryISO!)] }, { sort: { updated_at: -1 as const, _id: -1 } });
+      if (doc && (doc as any).last_price) {
+        const price = Number((doc as any).last_price);
+        if (Number.isFinite(price)) {
+          let tsNum = Math.max(startUTC.getTime() + 60_000, Math.min(endUTC.getTime(), endUTC.getTime() - 60_000));
+          if ((doc as any).updated_at) {
+            const cand = new Date((doc as any).updated_at).getTime();
+            if (cand >= startUTC.getTime() && cand <= endUTC.getTime()) tsNum = cand;
+          }
+          rows = [{ last_price: price, ts: new Date(tsNum).toISOString() } as any];
+          synthesized = true;
+          points_source = "synthesized";
+        }
+      }
+    }
+
+    if (!rows || rows.length === 0) {
       return res.json({
         symbol,
         expiry: expiryISO,
@@ -328,6 +456,7 @@ export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
         to: endUTC.toISOString(),
         points: [],
         count: 0,
+        points_source: "none",
       });
     }
 
@@ -336,8 +465,8 @@ export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
       // bucket by minute
       const bucketMs = 60_000;
       const map = new Map<number, { o: number; h: number; l: number; c: number }>();
-      for (const t of raw) {
-        const x = Math.floor(new Date(t.ts as any as string).getTime() / bucketMs) * bucketMs;
+      for (const t of rows) {
+        const x = Math.floor(new Date((t as any).ts as string).getTime() / bucketMs) * bucketMs;
         const p = Number((t as any).last_price);
         if (!Number.isFinite(p)) continue;
         const row = map.get(x);
@@ -361,12 +490,15 @@ export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
         tf: "1m",
         candles,
         count: candles.length,
+        points_source,
+        fallback_count: result.fallback_count,
+        prev_day_ymd: result.prev_day_ymd,
+        synthesized,
       });
     }
 
-    // default: line points
-    const points = raw
-      .map((r) => ({ x: new Date(r.ts as any as string).getTime(), y: Number((r as any).last_price) }))
+    const points = rows
+      .map((r) => ({ x: new Date((r as any).ts as string).getTime(), y: Number((r as any).last_price) }))
       .filter((p) => Number.isFinite(p.y));
 
     return res.json({
@@ -377,6 +509,10 @@ export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
       to: endUTC.toISOString(),
       points,
       count: points.length,
+      points_source,
+      fallback_count: result.fallback_count,
+      prev_day_ymd: result.prev_day_ymd,
+      synthesized,
     });
   } catch (e: any) {
     console.error("[getNiftyTicksToday]", e?.message || e);
@@ -386,7 +522,7 @@ export const getNiftyTicksToday: any = async (req: Request, res: Response) => {
 
 /* ────────────────────────────────────────────────────────────
  *  GET /api/gex/nifty/cache/expiries
- * ──────────────────────────────────────────────────────────── */
+ * ──────────────────────────────────────────── */
 export const listNiftyCacheExpiries: any = async (_req: Request, res: Response) => {
   try {
     const securityId = envInt("NIFTY_SECURITY_ID", 13);
@@ -400,9 +536,6 @@ export const listNiftyCacheExpiries: any = async (_req: Request, res: Response) 
   }
 };
 
-/* ────────────────────────────────────────────────────────────
- *  GET /api/gex/cache/debug
- * ──────────────────────────────────────────────────────────── */
 export const optionChainDebugSummary: any = async (_req: Request, res: Response) => {
   try {
     const coll: Collection<Document> = requireDb().collection("option_chain");

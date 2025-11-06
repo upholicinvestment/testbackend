@@ -1,3 +1,4 @@
+// src/controllers/gex_bulk.controller.ts
 import type { Request, Response } from "express";
 import type { Db, Collection, Document, WithId } from "mongodb";
 
@@ -102,7 +103,7 @@ function istTodayBoundsUTC() {
     month: "2-digit",
     day: "2-digit",
   });
-  const ymd = fmt.format(new Date()); // "YYYY-MM-DD" in IST context
+  const ymd = fmt.format(new Date());
   const [y, m, d] = ymd.split("-").map(Number);
   // 09:15 IST → 03:45 UTC ; 15:30 IST → 10:00 UTC (use 09:15 exact: 03:45)
   const startUTC = new Date(Date.UTC(y, m - 1, d, 3, 45, 0, 0));
@@ -110,6 +111,13 @@ function istTodayBoundsUTC() {
   const nowUTC = new Date();
   const endUTC = new Date(Math.min(endUTCMarket.getTime(), nowUTC.getTime()));
   return { startUTC, endUTC, ymd };
+}
+
+function istDayBoundsUTCFromYMD(ymd: string) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const startUTC = new Date(Date.UTC(y, m - 1, d, 3, 45, 0, 0));
+  const endUTCMarket = new Date(Date.UTC(y, m - 1, d, 10, 0, 0));
+  return { startUTC, endUTC: endUTCMarket, ymd };
 }
 
 function windowSinceMinutes(mins: number) {
@@ -136,6 +144,98 @@ function ticksFilter(
       { ts: { $gte: startUTC, $lte: endUTC } },
     ],
   };
+}
+
+/* tomatch cache controller behaviour: */
+function istYMDFromDate(d: Date) {
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" });
+  return fmt.format(d);
+}
+
+async function fetchTicksPreferPreviousDay(
+  _db: Db,
+  securityId: number,
+  seg: string,
+  symbol: string,
+  expiryISO: string,
+  startUTC: Date,
+  endUTC: Date,
+  fallbackLimit = Number(process.env.GEX_FALLBACK_TICKS || "2000"),
+): Promise<{
+  rows: Document[];
+  fallbackType: "today" | "previous_day" | "previous_partial" | "synth_from_option_chain" | "none";
+  fallback_count?: number;
+  prev_day_ymd?: string;
+}> {
+  const ticksColl = _db.collection("option_chain_ticks");
+  // 1) try requested window
+  const baseFilter = {
+    $and: [
+      looseByIdSegSym(securityId, seg, symbol),
+      expiryClause(expiryISO),
+      { ts: { $gte: startUTC, $lte: endUTC } },
+    ],
+  };
+  const windowRows = await ticksColl.find(baseFilter, { sort: { ts: 1, _id: 1 }, projection: { last_price: 1, ts: 1 } }).toArray();
+  if (windowRows && windowRows.length) return { rows: windowRows, fallbackType: "today" };
+
+  // 2) try latest ticks strictly before startUTC
+  const beforeFilter = {
+    $and: [
+      looseByIdSegSym(securityId, seg, symbol),
+      expiryClause(expiryISO),
+      { ts: { $lt: startUTC } },
+    ],
+  };
+  const prevPartial = await ticksColl.find(beforeFilter, { sort: { ts: -1, _id: -1 }, projection: { last_price: 1, ts: 1 }, limit: fallbackLimit }).toArray();
+  if (!prevPartial || !prevPartial.length) return { rows: [], fallbackType: "none" };
+
+  const latestPrev = prevPartial[0];
+  const latestPrevTs = new Date((latestPrev as any).ts);
+  const prevYmd = istYMDFromDate(latestPrevTs);
+
+  // Attempt to fetch full previous trading day window for prevYmd
+  const prevDayBounds = istDayBoundsUTCFromYMD(prevYmd);
+  const prevDayFilter = {
+    $and: [
+      looseByIdSegSym(securityId, seg, symbol),
+      expiryClause(expiryISO),
+      { ts: { $gte: prevDayBounds.startUTC, $lte: prevDayBounds.endUTC } },
+    ],
+  };
+
+  const prevDayRows = await ticksColl.find(prevDayFilter, { sort: { ts: 1, _id: 1 }, projection: { last_price: 1, ts: 1 } }).toArray();
+  if (prevDayRows && prevDayRows.length) {
+    return { rows: prevDayRows, fallbackType: "previous_day", prev_day_ymd: prevYmd, fallback_count: prevDayRows.length };
+  }
+
+  // If full previous day not available, try building series from option_chain snapshots
+  const ocColl = _db.collection("option_chain");
+  const candidates = await ocColl.find({ $and: [ looseByIdSegSym(securityId, seg, symbol), expiryClause(expiryISO) ] })
+    .project({ last_price: 1, updated_at: 1, ts: 1 })
+    .sort({ updated_at: 1, ts: 1 })
+    .toArray();
+
+  const ocRows: { last_price: number; ts: string }[] = [];
+  for (const d of candidates) {
+    const rawTs = (d as any).updated_at || (d as any).ts;
+    if (!rawTs) continue;
+    const dt = new Date(rawTs);
+    if (isNaN(dt.getTime())) continue;
+    if (dt >= prevDayBounds.startUTC && dt <= prevDayBounds.endUTC) {
+      const price = Number((d as any).last_price);
+      if (!Number.isFinite(price)) continue;
+      ocRows.push({ last_price: price, ts: dt.toISOString() });
+    }
+  }
+  if (ocRows.length) {
+    ocRows.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+    return { rows: ocRows as any as Document[], fallbackType: "synth_from_option_chain", prev_day_ymd: prevYmd, fallback_count: ocRows.length };
+  }
+
+  // fallback: return prevPartial (chronological)
+  prevPartial.reverse();
+  return { rows: prevPartial as Document[], fallbackType: "previous_partial", fallback_count: prevPartial.length };
 }
 
 /* ───────── GET /api/gex/nifty/bulk ─────────
@@ -183,18 +283,32 @@ export const getNiftyGexBulk: any = async (req: Request, res: Response) => {
         ? windowSinceMinutes(sinceMin)
         : istTodayBoundsUTC();
 
-    // Pull ticks inside window
+    // Pull ticks inside window (with extended fallback)
     const ticksColl = db().collection("option_chain_ticks");
     const filter = ticksFilter(securityId, seg, symbol, expiryISO, win.startUTC, win.endUTC);
-    const raw = await ticksColl
-      .find(filter, { sort: { ts: 1, _id: 1 }, projection: { last_price: 1, ts: 1 } })
-      .toArray();
+    const { rows: rawRows, fallbackType, fallback_count, prev_day_ymd } = await fetchTicksPreferPreviousDay(db(), securityId, seg, symbol, expiryISO, win.startUTC, win.endUTC);
 
-    const points = raw
-      .map((r) => ({ x: new Date(r.ts as any as string).getTime(), y: Number((r as any).last_price) }))
+    let rows = rawRows || [];
+    let synthesized = false;
+
+    // If still empty, fall back to option_chain.last_price single point
+    if ((!rows || rows.length === 0)) {
+      const price = Number((doc as any).last_price ?? NaN);
+      if (Number.isFinite(price)) {
+        let tsNum = win.startUTC.getTime() + 60_000;
+        if ((doc as any).updated_at) {
+          const cand = new Date((doc as any).updated_at).getTime();
+          if (cand >= win.startUTC.getTime() && cand <= win.endUTC.getTime()) tsNum = cand;
+        }
+        rows = [{ last_price: price, ts: new Date(tsNum).toISOString() } as any];
+        synthesized = true;
+      }
+    }
+
+    const points = (rows || [])
+      .map((r) => ({ x: new Date((r as any).ts as string).getTime(), y: Number((r as any).last_price) }))
       .filter((p) => Number.isFinite(p.y));
 
-    // Build GEX rows from snapshot (do not recompute here; reuse stored structure)
     const gexPayload = {
       symbol: (doc as any).underlying_symbol || "NIFTY",
       expiry: expiryISO,
@@ -213,22 +327,27 @@ export const getNiftyGexBulk: any = async (req: Request, res: Response) => {
       updated_at: (doc as any).updated_at,
     };
 
-    // Prefer last tick as spot if present
     if (points.length) {
       gexPayload.spot = points[points.length - 1].y;
     }
 
-    // ETag + Day header for cache
     const etag = `W/"${expiryISO}-${win.ymd}-${(doc as any).updated_at || "na"}-${points.length}"`;
     res.setHeader("ETag", etag);
     res.setHeader("X-GEX-Day", win.ymd);
 
-    // 304 support
     const inm = req.headers["if-none-match"];
     if (inm && inm === etag) {
       res.status(304).end();
       return;
     }
+
+    // Normalize fallbackType to points_source naming
+    let points_source = "none";
+    if (synthesized) points_source = "synthesized";
+    else if (fallbackType === "today") points_source = "today";
+    else if (fallbackType === "previous_day") points_source = "previous_day";
+    else if (fallbackType === "synth_from_option_chain") points_source = "previous_day_from_option_chain";
+    else if (fallbackType === "previous_partial") points_source = "previous_partial";
 
     return res.json({
       day: win.ymd,
@@ -238,6 +357,9 @@ export const getNiftyGexBulk: any = async (req: Request, res: Response) => {
         to: win.endUTC.toISOString(),
         points,
         count: points.length,
+        points_source,
+        fallback_count,
+        prev_day_ymd,
       },
     });
   } catch (e: any) {
