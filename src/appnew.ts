@@ -1,4 +1,3 @@
-// src/appnew.ts
 import express, { Request, Response, NextFunction, Express } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -79,23 +78,15 @@ import registerFutstkOhlcRoutes from "./api/futstk_ohlc.api";
 import gexCacheRouter from "./routes/gex_cache.routes";
 import { setGexCacheDb } from "./controllers/gex_cache.controller";
 
-/* ---------- OC rows cache bulk endpoints (if present) ---------- */
-import { ensureOcRowsIndexes, startOcRowsMaterializer } from "./services/oc_rows_cache";
-import registerOcRowsBulk from "./api/oc_rows_bulk.api";
-
 /* ---------- Admin / users ---------- */
 import userRoutes from "./routes/user.routes";
 import registerAdminRoutes from "./routes/admin.routes";
 
 /* ---------- Misc ---------- */
-import gexBulkRouter from "./routes/gex_bulk.routes";
-import { setGexBulkDb } from "./controllers/gex_bulk.controller";
+// NOTE: oc_rows_bulk and the oc_rows materializer/cache were removed — front-end should call /api/oc/rows or /api/oc/row directly.
 
 const app: Express = express();
 const httpServer = createServer(app);
-
-/* ===== new: ocRowsTimer ref so we can clear the materializer on shutdown ===== */
-let ocRowsTimer: NodeJS.Timeout | null = null;
 
 app.use(
   cors({
@@ -132,9 +123,8 @@ async function startServer() {
     setUserDatabase(primaryDb);
     setRequireEntitlementDb(primaryDb);
 
-    // GEX cache / bulk should use FNO DB per your note
+    // GEX cache should use FNO DB per your note
     setGexCacheDb(fnoDb);
-    setGexBulkDb(fnoDb);
 
     /* ============ PUBLIC ROUTES (no JWT) ============ */
     app.use("/api/auth", authRoutes);
@@ -170,14 +160,12 @@ async function startServer() {
     // Heatmap (FUTSTK ohlc) -> fnoDb
     Heatmap(app, fnoDb);
 
-    // FUTSTK OHLC / OC rows bulk are FNO data
-    registerOcRow(app); // if this is a thin wrapper that reads oc_rows_cache it may not need db param
-    registerOcRowsBulk(app, fnoDb);
+    // FUTSTK OHLC / OC rows are FNO data (thin endpoints)
+    registerOcRow(app, fnoDb);
     registerFutstkOhlcRoutes(app, fnoDb);
 
     // GEX cache routers (read-only endpoints) served from fnoDb
     app.use("/api", gexCacheRouter);
-    app.use("/api", gexBulkRouter);
 
     // Invoice / Orderbook (keep primary unless your orderbook reads FNO)
     Orderbook(app, primaryDb);
@@ -211,39 +199,6 @@ async function startServer() {
     } catch (e) {
       console.warn("ensureCalendarIndexes failed:", (e as any)?.message || e);
     }
-
-    // oc_rows_cache indexes live in FNO DB (ensure on fnoDb)
-    try {
-      await ensureOcRowsIndexes(fnoDb);
-      console.log("✅ oc_rows_cache indexes ensured (appnew.ts)");
-    } catch (e) {
-      console.warn("ensureOcRowsIndexes skipped:", (e as any)?.message || e);
-    }
-
-    /* ============ START: oc_rows_cache materializer (background) ============ */
-    try {
-      // Prefer an explicit FNO URI if supplied to avoid writing to wrong DB
-      const mongoUri = process.env.MONGO_FNO_URI || process.env.MONGO_URI || "mongodb://localhost:27017";
-      const ocUnderlying = Number(process.env.OC_UNDERLYING_ID || 13);
-      const ocSegment = process.env.OC_SEGMENT || "IDX_I";
-
-      console.log(`▶️ Starting oc_rows materializer using mongoUri=${mongoUri} db=${fnoDb.databaseName}`);
-
-      ocRowsTimer = startOcRowsMaterializer({
-        mongoUri,
-        dbName: fnoDb.databaseName,
-        underlyings: [{ id: ocUnderlying, segment: ocSegment }],
-        intervals: [3, 5, 15, 30],
-        sinceMs: Number(process.env.OC_ROWS_SINCE_MS || 12 * 60 * 60 * 1000), // first-pass window
-        scheduleMs: Number(process.env.OC_ROWS_SCHEDULE_MS || 60_000),
-        mode: "level",
-        unit: "bps",
-      });
-      console.log(`✅ oc_rows_cache materializer started (underlying=${ocUnderlying}/${ocSegment})`);
-    } catch (e) {
-      console.warn("⚠️ oc_rows_cache materializer failed to start:", (e as any)?.message || e);
-    }
-    /* ============ END: oc_rows_cache materializer ============ */
 
     /* ================== Error handler (last) ================== */
     app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
@@ -290,16 +245,6 @@ async function shutdown(code = 0) {
     console.warn("mongo close failed:", (e as any)?.message || e);
   }
 
-  try {
-    if (ocRowsTimer) {
-      clearInterval(ocRowsTimer);
-      ocRowsTimer = null;
-      console.log("✅ oc_rows_cache materializer timer cleared");
-    }
-  } catch (e) {
-    console.warn("failed clearing ocRowsTimer:", (e as any)?.message || e);
-  }
-
   httpServer.close(() => {
     console.log("✅ Server closed");
     process.exit(code);
@@ -309,8 +254,7 @@ process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
 export { io };
-<<<<<<< HEAD
-=======
+
 
 
 
@@ -1050,4 +994,3 @@ export { io };
 // process.on("SIGTERM", () => shutdown(0));
 
 // export { io };
->>>>>>> a1a2b96 (back upholicmainfno)

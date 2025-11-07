@@ -34,7 +34,6 @@ type RowOut = Pick<
   "volatility" | "time" | "signal" | "spot" | "tsBucket" | "updated_at"
 >;
 
-/* =================== Collections =================== */
 const CACHE_COLL = "oc_rows_cache";
 const TICKS_COLL = process.env.OC_SOURCE_COLL || "option_chain_ticks";
 
@@ -55,14 +54,6 @@ function istDayStartMs(utcMs: number) {
   return Math.floor(istMs / dayMs) * dayMs;
 }
 
-/**
- * Given any UTC timestamp (usually the stored tsBucket/start),
- * return the **canonical candle END** for that interval on the same trading day:
- *  - Grid starts at 09:15 IST
- *  - First candle end is fixed (e.g., 09:18 for 3m)
- *  - Uses CEIL to snap forward to the next boundary
- *  - Clamped to 15:30 IST
- */
 function canonicalBucketEndUTCFromStartUTC(tsBucketUtc: Date, intervalMin: number): Date {
   const intervalMs = Math.max(1, intervalMin) * 60_000;
   const utcMs = tsBucketUtc.getTime();
@@ -71,20 +62,16 @@ function canonicalBucketEndUTCFromStartUTC(tsBucketUtc: Date, intervalMin: numbe
   const sessionStartIst = dayStartIst + SESSION_START_MIN * 60_000; // 09:15 IST
   const sessionEndIst   = dayStartIst + SESSION_END_MIN   * 60_000; // 15:30 IST
 
-  // Work in IST to align to human grid
   const istMs  = utcMs + IST_OFFSET_MS;
   const delta  = istMs - sessionStartIst;
 
-  // Snap to the NEXT boundary (ceil). Ensure at least one step past 09:15
-  // so the first close is 09:18/09:20/09:30/09:45 (never 09:15).
   const k = Math.max(1, Math.ceil(delta / intervalMs));
   const alignedEndIst = Math.min(sessionStartIst + k * intervalMs, sessionEndIst);
 
-  // Convert back to UTC
   return new Date(alignedEndIst - IST_OFFSET_MS);
 }
 
-/* =================== Expiry resolver =================== */
+/* =================== Expiry resolver (uses passed db) =================== */
 async function resolveActiveExpiry(
   db: Db,
   underlying: number,
@@ -190,11 +177,6 @@ export default function registerOcRowsBulk(app: Express, db: Db) {
           return;
         }
 
-        // ---------------------------
-        // Cutoff logic (modified)
-        // - During market hours: preserve original sinceMin behavior
-        // - Outside market hours (before 09:15 IST or after 15:30 IST): expand to 24 hours
-        // ---------------------------
         const MAX_LOOKBACK_MS = 24 * 60 * 60 * 1000; // 24 hours
 
         const nowUtc = new Date();
@@ -203,18 +185,13 @@ export default function registerOcRowsBulk(app: Express, db: Db) {
         const sessionStartIst = istDayStart + SESSION_START_MIN * 60_000; // 09:15 IST
         const sessionEndIst   = istDayStart + SESSION_END_MIN   * 60_000; // 15:30 IST
 
-        // Default (preserve existing behavior during market hours)
         let cutoffMs = Date.now() - Math.max(1, sinceMin) * 60_000;
 
-        // If we're outside the trading session (after 15:30 IST or before 09:15 IST),
-        // expand the window to 24 hours so the UI keeps showing the last available data
-        // until new data arrives or the market re-opens.
         if (nowIstMs >= sessionEndIst || nowIstMs < sessionStartIst) {
           cutoffMs = Date.now() - MAX_LOOKBACK_MS;
         }
 
         const cutoff = new Date(cutoffMs);
-
         const coll = db.collection<CacheDoc>(CACHE_COLL);
 
         const byInterval: Record<string, RowOut[]> = {};

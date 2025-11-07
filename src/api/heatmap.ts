@@ -1,6 +1,5 @@
 import { Express, Request, Response } from "express";
 import { Db } from "mongodb";
-import crypto from "crypto";
 
 type SecurityMeta = { name: string; sector: string };
 
@@ -15,13 +14,7 @@ type StockData = {
   received_at?: string;
 };
 
-function buildETag(identity: unknown) {
-  return `"heatmap-${crypto
-    .createHash("md5")
-    .update(JSON.stringify(identity))
-    .digest("hex")}"`;
-}
-
+/* ----- static sample mapping (keep or replace with your real master) ----- */
 const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "360ONE NOV FUT", security_id: 38313, sector: "Financial Services" },
   { name: "ABB NOV FUT", security_id: 38314, sector: "Capital Goods" },
@@ -234,9 +227,6 @@ const securities: { name: string; security_id: number; sector: string }[] = [
   { name: "POWERINDIA NOV FUT", security_id: 49975, sector: "Capital Goods" },
 ];
 
-
-
-
 export function Heatmap(app: Express, db: Db) {
   const collection = db.collection("nse_futstk_ohlc");
 
@@ -307,31 +297,19 @@ export function Heatmap(app: Express, db: Db) {
       };
     });
 
-    // identity for ETag: count + max timestamp + rough sums
-    let lastISO: string | null = null;
-    let sumL = 0;
-    let sumC = 0;
-    for (const it of processed) {
-      const l = parseFloat(it.LTP ?? "0");
-      const c = parseFloat(it.close ?? "0");
-      if (Number.isFinite(l)) sumL += l;
-      if (Number.isFinite(c)) sumC += c;
-      const t = it.received_at ? new Date(it.received_at).getTime() : 0;
-      if (!lastISO || (t && (!lastISO || t > new Date(lastISO).getTime()))) {
-        lastISO = it.received_at!;
-      }
-    }
-
-    return { processed, lastISO, sumL: Math.round(sumL), sumC: Math.round(sumC) };
+    return { processed };
   }
 
   /**
    * Legacy/simple endpoint: GET /api/heatmap
    * Returns array of stocks (latest per security). 60s cache headers.
    */
-  app.get("/api/heatmap", async (_req: Request, res: Response) => {
+  app.get("/api/heatmap", async (req: Request, res: Response) => {
     try {
-      const { processed } = await latestPerSecurity(1440); // 24h cutoff by default
+      const sinceMin = Math.max(1, Number(req.query.sinceMin) || 1440);
+      const { processed } = await latestPerSecurity(sinceMin);
+
+      // Keep lightweight caching headers for clients (unchanged logic)
       res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=30");
       res.setHeader("Vary", "Accept-Encoding");
       res.json(processed);
@@ -344,34 +322,5 @@ export function Heatmap(app: Express, db: Db) {
     }
   });
 
-  /**
-   * Bulk + ETag + 24h backfill by default
-   * GET /api/heatmap/bulk?sinceMin=1440
-   * Response: { stocks: StockData[], lastISO: string|null }
-   */
-  app.get("/api/heatmap/bulk", async (req: Request, res: Response) => {
-    try {
-      const sinceMin = Math.max(1, Number(req.query.sinceMin) || 1440);
-      const { processed, lastISO, sumL, sumC } = await latestPerSecurity(sinceMin);
-
-      const identity = { cnt: processed.length, lastISO, sumL, sumC, sinceMin };
-      const etag = buildETag(identity);
-
-      const ifNoneMatch = req.headers["if-none-match"];
-      if (ifNoneMatch && ifNoneMatch === etag) {
-        res.status(304).end();
-        return;
-      }
-
-      res.setHeader("ETag", etag);
-      res.setHeader("Cache-Control", "no-store");
-      res.json({ stocks: processed, lastISO });
-    } catch (error) {
-      console.error("Error in /api/heatmap/bulk:", error);
-      res.status(500).json({
-        error: "Internal server error",
-        details: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
-  });
-}                                                      
+  // NOTE: removed /api/heatmap/bulk and any ETag/If-None-Match logic per request
+}
