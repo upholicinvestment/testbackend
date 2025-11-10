@@ -2,9 +2,10 @@
 import { Router } from "express";
 import {
   getNiftyGexFromCache,
+  getNiftyTicksToday,
   listNiftyCacheExpiries,
   optionChainDebugSummary,
-  getNiftyTicksToday
+  getNiftyGexVolSeries,
 } from "../controllers/gex_cache.controller";
 
 const r = Router();
@@ -25,5 +26,8 @@ r.get("/gex/nifty/ticks", getNiftyTicksToday);
  */
 r.get("/gex/nifty/cache/expiries", listNiftyCacheExpiries);
 r.get("/gex/cache/debug", optionChainDebugSummary);
+
+// 🔹 NIFTY GEX volume/oi time series (PUBLIC)
+r.get("/gex/nifty/vol_series", getNiftyGexVolSeries);
 
 export default r;

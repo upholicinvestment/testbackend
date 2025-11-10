@@ -10,22 +10,22 @@ import { Server as SocketIOServer } from "socket.io";
 dotenv.config();
 
 /* ---------- DB helper (single place) ---------- */
-import { connectPrimary, connectFno, getPrimaryDb, closeAll } from "./utils/db";
+import { connectPrimary, connectFno, getPrimaryDb, closeAll } from "./dbfno/db";
 
 /* ---------- Market / data sockets & services (KEEP ONLY THESE) ---------- */
-import { GexLevelsCalc, startGexLevelsEveryMinute } from "./api/gexLevelsCalc";
-import { AdvDecSave, startAdvDecMinuteJob } from "./api/advdecSave";
+import { GexLevelsCalc, startGexLevelsEveryMinute } from "./dbfno/gexLevelsCalc";
+import { AdvDecSave, startAdvDecMinuteJob } from "./dbfno/advdecSave";
 
-import { DhanSocket } from "./socket/dhan.socket";
-import { ltpRoutes } from "./routes/ltp.route";
-import { setLtpDatabase } from "./services/ltp.service";
+import { DhanSocket } from "./dbfno/dhan.socket";
+import { ltpRoutes } from "./dbfno/ltp.route";
+import { setLtpDatabase } from "./dbfno/ltp.service";
 
 import {
   fetchAndStoreInstruments,
   setQuoteDatabase,
   startFutstkOhlcRefresher,
-} from "./services/quote.service";
-import { setInstrumentDatabase } from "./services/instrument.service";
+} from "./dbfno/quote.service";
+import { setInstrumentDatabase } from "./dbfno/instrument.service";
 
 /* ---------- Option Chain deps & public endpoints (ADDED) ---------- */
 import {
@@ -35,11 +35,11 @@ import {
   getLiveOptionChain,
   toNormalizedArray,
   DhanOptionLeg,
-} from "./services/option_chain";
-import registerOptionChainExpiries from "./api/optionchain/expiries";
-import registerOptionChainSnapshot from "./api/optionchain/snapshot";
-import { istNowString, istTimestamp } from "./utils/time";
-import { getDhanMinGap } from "./utils/dhanPacer";
+} from "./dbfno/option_chain";
+import registerOptionChainExpiries from "./dbfno/expiries";
+import registerOptionChainSnapshot from "./dbfno/snapshot";
+import { istNowString, istTimestamp } from "./dbfno/time";
+import { getDhanMinGap } from "./dbfno/dhanPacer";
 
 /// small helpers
 function sleep(ms: number) {

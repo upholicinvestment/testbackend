@@ -1,3 +1,4 @@
+// src/utils/mailer.ts
 import nodemailer from "nodemailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
 

@@ -1,3 +1,4 @@
+// server/src/controllers/data.controller.ts
 import { Request, Response } from 'express';
 import { Data } from '../models/data.model';
 

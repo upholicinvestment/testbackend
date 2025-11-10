@@ -1,9 +1,15 @@
-//src/services/oc_signal.ts
+// src/services/oc_signal.ts
 import { MongoClient, ObjectId } from "mongodb";
 
 /* ========= Types ========= */
 type Greeks = { delta?: number; theta?: number; gamma?: number; vega?: number };
-type Leg = { greeks?: Greeks; last_price?: number; oi?: number; previous_oi?: number; volume?: number };
+type Leg = {
+  greeks?: Greeks;
+  last_price?: number;
+  oi?: number;
+  previous_oi?: number;
+  volume?: number;
+};
 type Strike = { strike: number; ce?: Leg; pe?: Leg };
 
 export type OptionChainDoc = {
@@ -35,7 +41,7 @@ export type DecisionRowOut = DecisionRow & {
 const IST_OFFSET_MIN = 330; // +05:30
 const IST_OFFSET_MS = IST_OFFSET_MIN * 60_000;
 const SESSION_START_MIN = 9 * 60 + 15; // 09:15 IST
-const SESSION_END_MIN = 15 * 60 + 30;  // 15:30 IST
+const SESSION_END_MIN = 15 * 60 + 30; // 15:30 IST
 const DAY_MS = 86_400_000;
 
 /* ========= Time Helpers ========= */
@@ -54,21 +60,29 @@ function istDayStartMs(utcMs: number) {
   return Math.floor(istMs / DAY_MS) * DAY_MS;
 }
 
-/** Build fixed 09:15–15:30 IST grid in UTC for given interval */
-function buildSessionBucketsUTC(intervalMin: number): { start: Date; end: Date }[] {
+/**
+ * Build fixed 09:15–15:30 IST grid in UTC for given interval,
+ * anchored to the IST day containing baseUtcMs (or "today" if not passed).
+ */
+function buildSessionBucketsUTC(
+  intervalMin: number,
+  baseUtcMs?: number
+): { start: Date; end: Date }[] {
   const intervalMs = intervalMin * 60_000;
-  const now = new Date();
-  const utcMs = now.getTime();
+  const utcMs = baseUtcMs ?? Date.now();
   const istDayStart = istDayStartMs(utcMs);
 
   const startIst = istDayStart + SESSION_START_MIN * 60_000;
-  const endIst   = istDayStart + SESSION_END_MIN   * 60_000;
+  const endIst = istDayStart + SESSION_END_MIN * 60_000;
 
   const buckets: { start: Date; end: Date }[] = [];
   for (let t = startIst; t < endIst; t += intervalMs) {
     const s = t;
-    const e = Math.min(t + intervalMs, endIst); // clamp to 15:30
-    buckets.push({ start: new Date(s - IST_OFFSET_MS), end: new Date(e - IST_OFFSET_MS) });
+    const e = Math.min(t + intervalMs, endIst);
+    buckets.push({
+      start: new Date(s - IST_OFFSET_MS),
+      end: new Date(e - IST_OFFSET_MS),
+    });
   }
   return buckets;
 }
@@ -78,60 +92,88 @@ function gaussianWeight(k: number, spot: number, width = 300): number {
   const d = k - spot;
   return Math.exp(-(d * d) / (2 * width * width));
 }
+
 function detectStrikeStep(strikes: Strike[]): number {
   const vals = Array.from(new Set(strikes.map((s) => Number(s.strike))))
     .filter(Number.isFinite)
     .sort((a, b) => a - b);
+
   let step = 50;
   for (let i = 1; i < Math.min(vals.length, 50); i++) {
     const d = Math.abs(vals[i] - vals[i - 1]);
-    if (d > 0) { step = d; break; }
+    if (d > 0) {
+      step = d;
+      break;
+    }
   }
   return step;
 }
+
 function roundToStep(price: number, step: number): number {
   return Math.round(price / step) * step;
 }
-function signalFromPrice(prevSpot: number, spot: number): "Bullish" | "Bearish" {
+
+function signalFromPrice(
+  prevSpot: number,
+  spot: number
+): "Bullish" | "Bearish" {
   return spot >= prevSpot ? "Bullish" : "Bearish";
 }
-function signalFromWeightedDelta(strikes: Strike[] = [], spot: number): "Bullish" | "Bearish" {
+
+function signalFromWeightedDelta(
+  strikes: Strike[] = [],
+  spot: number
+): "Bullish" | "Bearish" {
   let net = 0;
   for (const s of strikes) {
     const w = gaussianWeight(Number(s.strike), spot, 300);
     const ceDelta = s.ce?.greeks?.delta ?? 0;
     const peDelta = s.pe?.greeks?.delta ?? 0;
-    const ceOI    = s.ce?.oi ?? 0;
-    const peOI    = s.pe?.oi ?? 0;
+    const ceOI = s.ce?.oi ?? 0;
+    const peOI = s.pe?.oi ?? 0;
     net += w * (ceDelta * ceOI + peDelta * peOI);
   }
   return net >= 0 ? "Bullish" : "Bearish";
 }
 
 /* ========= Volatility ========= */
-function volatilityValue(prevSpot: number | undefined, spot: number, unit: "bps" | "pct" | "points" = "bps"): number {
+function volatilityValue(
+  prevSpot: number | undefined,
+  spot: number,
+  unit: "bps" | "pct" | "points" = "bps"
+): number {
   if (!prevSpot || prevSpot <= 0) return 0;
   const diff = spot - prevSpot;
+
   if (unit === "points") return Number(diff.toFixed(2));
+
   const pct = (diff / prevSpot) * 100;
   if (unit === "pct") return Number(pct.toFixed(2));
+
   const bps = pct * 100;
   return Number(bps.toFixed(2));
 }
 
 /* ========= Liquidity ========= */
-function liquidityFromOIDelta(curr: Strike[] = [], prev: Strike[] = [], spot: number, width = 300) {
+function liquidityFromOIDelta(
+  curr: Strike[] = [],
+  prev: Strike[] = [],
+  spot: number,
+  width = 300
+) {
   const prevMap = new Map<number, Strike>();
   for (const p of prev) prevMap.set(Number(p.strike), p);
 
-  let ceSum = 0, peSum = 0;
+  let ceSum = 0;
+  let peSum = 0;
+
   for (const s of curr) {
     const k = Number(s.strike);
     const w = gaussianWeight(k, spot, width);
     const p = prevMap.get(k);
 
-    const ceNow  = s.ce?.oi ?? 0;
-    const peNow  = s.pe?.oi ?? 0;
+    const ceNow = s.ce?.oi ?? 0;
+    const peNow = s.pe?.oi ?? 0;
     const cePrev = p?.ce?.oi ?? 0;
     const pePrev = p?.pe?.oi ?? 0;
 
@@ -141,22 +183,33 @@ function liquidityFromOIDelta(curr: Strike[] = [], prev: Strike[] = [], spot: nu
     ceSum += w * dce;
     peSum += w * dpe;
   }
+
   const total = ceSum + peSum;
   if (total <= 0) return { liqCall: 0.5, liqPut: 0.5 };
   return { liqCall: ceSum / total, liqPut: peSum / total };
 }
 
-function liquidityFromOILevel(curr: Strike[] = [], spot: number, windowSteps = 5) {
+function liquidityFromOILevel(
+  curr: Strike[] = [],
+  spot: number,
+  windowSteps = 5
+) {
   if (!curr.length) return { liqCall: 0.5, liqPut: 0.5 };
-  const step = detectStrikeStep(curr);
-  const atm  = roundToStep(spot, step);
-  const inside = curr.filter((s) => Math.abs(Number(s.strike) - atm) <= windowSteps * step);
 
-  let ceSum = 0, peSum = 0;
+  const step = detectStrikeStep(curr);
+  const atm = roundToStep(spot, step);
+
+  const inside = curr.filter(
+    (s) => Math.abs(Number(s.strike) - atm) <= windowSteps * step
+  );
+
+  let ceSum = 0;
+  let peSum = 0;
   for (const s of inside) {
     ceSum += s.ce?.oi ?? 0;
     peSum += s.pe?.oi ?? 0;
   }
+
   const total = ceSum + peSum;
   if (total <= 0) return { liqCall: 0.5, liqPut: 0.5 };
   return { liqCall: ceSum / total, liqPut: peSum / total };
@@ -175,17 +228,19 @@ function classifyMove(
 ): { moveClass?: MoveClass; pointsHint?: PointsHint } {
   const liqSide = liqCall >= liqPut ? "Call" : "Put";
   const big = Math.abs(volatilityBps) >= bigThresholdBps;
-  const up  = volatilityBps > 0;
+  const up = volatilityBps > 0;
 
-  if (big && up   && signal === "Bullish" && liqSide === "Call") return { moveClass: "Big Upside",   pointsHint: "300-400" };
-  if (big && !up  && signal === "Bearish" && liqSide === "Put")  return { moveClass: "Big Downside", pointsHint: "300-400" };
-  if (!big && up  && signal === "Bullish" && liqSide === "Put")  return { moveClass: "Small Upside", pointsHint: "100-200" };
-  if (!big && !up && signal === "Bearish" && liqSide === "Call") return { moveClass: "Small Downside", pointsHint: "100-200" };
+  if (big && up && signal === "Bullish" && liqSide === "Call")
+    return { moveClass: "Big Upside", pointsHint: "300-400" };
+  if (big && !up && signal === "Bearish" && liqSide === "Put")
+    return { moveClass: "Big Downside", pointsHint: "300-400" };
+  if (!big && up && signal === "Bullish" && liqSide === "Put")
+    return { moveClass: "Small Upside", pointsHint: "100-200" };
+  if (!big && !up && signal === "Bearish" && liqSide === "Call")
+    return { moveClass: "Small Downside", pointsHint: "100-200" };
+
   return {};
 }
-
-/* ========= Mongo ========= */
-const SORT_SPEC: Record<string, 1 | -1> = { ts: -1, updated_at: -1, _id: -1 };
 
 /* ========= Main Function ========= */
 export async function computeRowsFromDBWindow(
@@ -216,20 +271,67 @@ export async function computeRowsFromDBWindow(
 
   const client = new MongoClient(mongoUri);
   await client.connect();
+
   try {
-    const coll = client.db(dbName).collection<OptionChainDoc>(process.env.OC_SOURCE_COLL || "option_chain_ticks");
+    const coll = client
+      .db(dbName)
+      .collection<OptionChainDoc>(
+        process.env.OC_SOURCE_COLL || "option_chain_ticks"
+      );
 
-    // Canonical fixed session (09:15 → 15:30 IST)
-    const buckets = buildSessionBucketsUTC(intervalMin);
-    const sessionStart = buckets[0].start;
-    const sessionEnd   = buckets[buckets.length - 1].end;
+    /* 1) Try current IST session */
+    let buckets = buildSessionBucketsUTC(intervalMin);
+    if (!buckets.length) return [];
 
-    const ticks = await coll
-      .find({ underlying_security_id, expiry, ts: { $gte: sessionStart, $lt: sessionEnd } })
+    let sessionStart = buckets[0].start;
+    let sessionEnd = buckets[buckets.length - 1].end;
+
+    let ticks = await coll
+      .find({
+        underlying_security_id,
+        expiry,
+        ts: { $gte: sessionStart, $lt: sessionEnd },
+      })
       .sort({ ts: 1 })
       .toArray();
 
-    if (!ticks.length) return [];
+    /* 2) If no ticks (holiday/weekend/closed), fall back to last trading session */
+    if (!ticks.length) {
+      const last = await coll
+        .find({ underlying_security_id, expiry })
+        .project({ ts: 1 })
+        .sort({ ts: -1 })
+        .limit(1)
+        .toArray();
+
+      if (!last.length || !last[0].ts) {
+        return [];
+      }
+
+      const lastTs =
+        last[0].ts instanceof Date
+          ? last[0].ts
+          : new Date(last[0].ts as any);
+
+      buckets = buildSessionBucketsUTC(intervalMin, lastTs.getTime());
+      if (!buckets.length) return [];
+
+      sessionStart = buckets[0].start;
+      sessionEnd = buckets[buckets.length - 1].end;
+
+      ticks = await coll
+        .find({
+          underlying_security_id,
+          expiry,
+          ts: { $gte: sessionStart, $lt: sessionEnd },
+        })
+        .sort({ ts: 1 })
+        .toArray();
+
+      if (!ticks.length) {
+        return [];
+      }
+    }
 
     const out: DecisionRowOut[] = [];
     let prevSpot: number | undefined;
@@ -240,18 +342,19 @@ export async function computeRowsFromDBWindow(
         return ts >= start && ts < end;
       });
 
-      // Skip empty early candles until first tick exists
-      if (!slice.length && !prevSpot) continue;
+      // Only output rows for buckets that have real ticks
+      if (!slice.length) continue;
 
-      const endMs = end.getTime();
-      const first = slice[0] || ticks.find((t) => new Date(t.ts!).getTime() < endMs)!;
-      const last  = slice[slice.length - 1] || first;
+      const first = slice[0];
+      const last = slice[slice.length - 1];
 
       const spot = Number(last.spot ?? last.last_price ?? 0);
-      if (!prevSpot) prevSpot = Number(first.spot ?? first.last_price ?? spot);
+      if (!prevSpot) {
+        prevSpot = Number(first.spot ?? first.last_price ?? spot);
+      }
 
       const volDisplay = volatilityValue(prevSpot, spot, unit);
-      const volBps     = volatilityValue(prevSpot, spot, "bps");
+      const volBps = volatilityValue(prevSpot, spot, "bps");
 
       let sig: "Bullish" | "Bearish" = signalFromPrice(prevSpot, spot);
       if (signalMode === "delta") {
@@ -263,11 +366,23 @@ export async function computeRowsFromDBWindow(
 
       const { liqCall, liqPut } =
         mode === "delta"
-          ? liquidityFromOIDelta(last.strikes ?? [], first.strikes ?? [], spot, width)
+          ? liquidityFromOIDelta(
+              last.strikes ?? [],
+              first.strikes ?? [],
+              spot,
+              width
+            )
           : liquidityFromOILevel(last.strikes ?? [], spot, windowSteps);
 
-      const labelTime = timeIST(end); // bucket END
-      const row: DecisionRowOut = { volatility: volDisplay, time: labelTime, signal: sig, spot };
+      // *** IMPORTANT: label by BUCKET START so 3-min shows 09:15, 09:18, ... ***
+      const labelTime = timeIST(start);
+
+      const row: DecisionRowOut = {
+        volatility: volDisplay,
+        time: labelTime,
+        signal: sig,
+        spot,
+      };
 
       if (classify) {
         const c = classifyMove(sig, liqCall, liqPut, volBps);
@@ -295,11 +410,18 @@ export async function computeRowFromDB(
   unit: "bps" | "pct" | "points" = "bps",
   signalMode: "price" | "delta" | "hybrid" = "price"
 ): Promise<DecisionRow | undefined> {
-  const rows = await computeRowsFromDBWindow(mongoUri, dbName, underlying_security_id, expiry, 2, {
-    unit,
-    signalMode,
-    classify: false,
-    intervalMin: 3,
-  });
+  const rows = await computeRowsFromDBWindow(
+    mongoUri,
+    dbName,
+    underlying_security_id,
+    expiry,
+    2,
+    {
+      unit,
+      signalMode,
+      classify: false,
+      intervalMin: 3,
+    }
+  );
   return rows.slice(-1)[0];
 }

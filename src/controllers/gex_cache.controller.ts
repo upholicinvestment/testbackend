@@ -451,3 +451,162 @@ export const optionChainDebugSummary: any = async (_req: Request, res: Response)
     return res.status(500).json({ error: "OC_DEBUG_FAILED", detail: String(e?.message || e) });
   }
 };
+
+/* GET /api/gex/nifty/vol_series
+   Query:
+     expiry=YYYY-MM-DD        (optional — will auto-pick nearest/latest if missing)
+     since=ISO_DATE           (optional)
+     until=ISO_DATE           (optional)
+     limit=NUMBER             (optional, default 1000, max 5000)
+   Response:
+     { symbol, expiry, count, series: [{ ts: <ISO>, ts_ms: <ms>, total_gex_vol_raw, total_gex_oi_raw }] }
+*/
+export const getNiftyGexVolSeries: any = async (req: Request, res: Response) => {
+  try {
+    const securityId = envInt("NIFTY_SECURITY_ID", 13);
+    const seg = process.env.NIFTY_UNDERLYING_SEG || "IDX_I";
+    const symbol = process.env.NIFTY_SYMBOL || "NIFTY";
+
+    const collOC = requireDb().collection("option_chain");
+    const collTicks = requireDb().collection("option_chain_ticks");
+
+    // ---- resolve expiry (same logic as cache endpoint) ----
+    const requested = (req.query.expiry as string | undefined)?.slice(0, 10) || null;
+    let expiryISO: string | null = requested;
+
+    if (!expiryISO) {
+      const exps = await listDistinctExpiries(collOC, looseByIdSegSym(securityId, seg, symbol));
+      const todayISO = new Date().toISOString().slice(0, 10);
+      expiryISO = pickNearestOrLatest(exps, todayISO);
+      if (!expiryISO) {
+        return res.status(404).json({ error: "NO_EXPIRY_AVAILABLE" });
+      }
+    }
+
+    // ---- limit ----
+    const limitRaw = parseInt(String(req.query.limit || "1000"), 10);
+    const limit = Number.isFinite(limitRaw)
+      ? Math.max(1, Math.min(5000, limitRaw))
+      : 1000;
+
+    // ---- time window: if since/until not passed → use TODAY (IST) ----
+    let since: Date | null = null;
+    let until: Date | null = null;
+    let tradingDayIST: string | undefined;
+
+    if (req.query.since || req.query.until) {
+      since = req.query.since ? new Date(String(req.query.since)) : null;
+      until = req.query.until ? new Date(String(req.query.until)) : null;
+    } else {
+      const { startUTC, endUTC, ymd } = istTodayBoundsUTC();
+      since = startUTC;
+      until = endUTC;
+      tradingDayIST = ymd;
+    }
+
+    // ---- base query (underlying + expiry) ----
+    const q: any = {
+      $and: [looseByIdSegSym(securityId, seg, symbol), expiryClause(expiryISO)],
+    };
+
+    if (since || until) {
+      const tsClause: any = {};
+      if (since) tsClause.$gte = since;
+      if (until) tsClause.$lte = until;
+      q.$and.push({ ts: tsClause });
+    }
+
+    // ---- projection (keep flexible: supports both tick/ocached-style docs) ----
+    const proj = {
+      ts: 1,
+      ts_ms: 1,
+      expiry: 1,
+      updated_at: 1,
+      strikes: 1,
+      last_price: 1,
+      total_gex_vol_raw: 1,
+      total_gex_oi_raw: 1,
+      gex_vol_raw: 1,
+      gex_oi_raw: 1,
+      underlying_security_id: 1,
+      underlying_segment: 1,
+      underlying_symbol: 1,
+    };
+
+    const cursor = collTicks
+      .find(q)
+      .project(proj)
+      .sort({ ts: 1, _id: 1 })
+      .limit(limit);
+
+    // single lot lookup
+    const lot = await getLotSize(requireDb(), securityId, seg);
+
+    const out: {
+      ts: string;
+      ts_ms: number;
+      total_gex_vol_raw: number;
+      total_gex_oi_raw: number;
+    }[] = [];
+
+    for await (const d of cursor) {
+      // pick a reliable timestamp
+      const ms =
+        typeof (d as any).ts_ms === "number"
+          ? (d as any).ts_ms
+          : (d as any).ts
+          ? new Date((d as any).ts).getTime()
+          : (d as any).updated_at
+          ? new Date((d as any).updated_at).getTime()
+          : NaN;
+
+      if (!Number.isFinite(ms)) continue;
+
+      const tsDate = new Date(ms);
+
+      // Build minimal OCached-like shape for computeGexFromCachedDoc
+      const ocached = {
+        underlying_security_id:
+          (d as any).underlying_security_id ?? securityId,
+        underlying_segment:
+          (d as any).underlying_segment ?? seg,
+        underlying_symbol:
+          (d as any).underlying_symbol ?? symbol,
+        last_price:
+          typeof (d as any).last_price !== "undefined"
+            ? (d as any).last_price
+            : 0,
+        expiry:
+          (d as any).expiry
+            ? String((d as any).expiry).slice(0, 10)
+            : expiryISO,
+        strikes: (d as any).strikes || [],
+        updated_at: tsDate,
+      };
+
+      const computed = computeGexFromCachedDoc(ocached as any, lot);
+
+      out.push({
+        ts: tsDate.toISOString(),
+        ts_ms: ms,
+        total_gex_vol_raw: Number(computed.total_gex_vol_raw || 0),
+        total_gex_oi_raw: Number(computed.total_gex_oi_raw || 0),
+      });
+    }
+
+    return res.json({
+      symbol,
+      expiry: expiryISO,
+      trading_day_ist: tradingDayIST,
+      from: since ? since.toISOString() : undefined,
+      to: until ? until.toISOString() : undefined,
+      count: out.length,
+      series: out,
+    });
+  } catch (e: any) {
+    console.error("[getNiftyGexVolSeries]", e?.message || e);
+    return res
+      .status(500)
+      .json({ error: "GEX_VOL_SERIES_FAILED", detail: String(e?.message || e) });
+  }
+};

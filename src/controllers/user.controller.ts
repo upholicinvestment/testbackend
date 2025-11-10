@@ -1,3 +1,4 @@
+// server/src/controllers/user.controller.ts
 import type { Request, Response, RequestHandler } from "express";
 import { Db, ObjectId } from "mongodb";
 import jwt from "jsonwebtoken";
