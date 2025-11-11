@@ -207,7 +207,7 @@ async function startServer() {
     });
 
     /* ================== Start HTTP server ================== */
-    const PORT = Number(process.env.PORT_APP) || Number(process.env.PORT) || 8100;
+    const PORT = Number(process.env.PORT_APP) || Number(process.env.PORT) || 8000;
     httpServer.listen(PORT, () => {
       console.log(`🚀 appnew.ts running at http://localhost:${PORT}`);
       console.log(`🔗 Allowed CORS origin: ${process.env.CLIENT_URL || "http://localhost:5173"}`);
