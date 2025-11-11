@@ -7,8 +7,8 @@ import { Db } from "mongodb";
 // If you're not on Node 18+, uncomment the next line:
 // import fetch from "node-fetch";
 
-const API_BASE = "https://api.upholictech.com/api";
-// const API_BASE = "http://localhost:8000/api";
+// const API_BASE = "https://api.upholictech.com/api";
+const API_BASE = "http://localhost:8000/api";
 
 /* ================== Types ================== */
 type GexRow = {
@@ -295,7 +295,7 @@ async function computeAndSaveSnapshot(db: Db, symbol = "NIFTY", explicitExpiry?:
   // Build doc
   const now = new Date();
   const minute_bucket = minuteBucket(now.getTime());
-  const at_utc = now;
+  // const at_utc = now;
   const at_ist = formatIst(now);
 
   const client_key =
@@ -306,12 +306,12 @@ async function computeAndSaveSnapshot(db: Db, symbol = "NIFTY", explicitExpiry?:
     symbol: symbolUp,
     expiry,
     spot,
-    trading_day_ist,
+    // trading_day_ist,
     levels,
-    at_utc,
+    // at_utc,
     at_ist,
-    minute_bucket,
-    client_key,
+    // minute_bucket,
+    // client_key,
   };
 
   // Save once per minute per trading day

@@ -295,7 +295,7 @@ async function computeAndSaveSnapshot(db: Db, symbol = "NIFTY", explicitExpiry?:
   // Build doc
   const now = new Date();
   const minute_bucket = minuteBucket(now.getTime());
-  const at_utc = now;
+  // const at_utc = now;
   const at_ist = formatIst(now);
 
   const client_key =
@@ -308,7 +308,7 @@ async function computeAndSaveSnapshot(db: Db, symbol = "NIFTY", explicitExpiry?:
     spot,
     trading_day_ist,
     levels,
-    at_utc,
+    // at_utc,
     at_ist,
     minute_bucket,
     client_key,

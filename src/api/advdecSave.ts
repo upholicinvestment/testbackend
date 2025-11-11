@@ -136,7 +136,7 @@ async function saveAdvDecSnapshot(db: Db, opts: SaveOpts) {
     expiry: expiry ?? null,
     current: data.current,
     chartData: data.chartData,
-    at_utc: now, // Date
+    // at_utc: now, // Date
     at_ist: formatIst(now), // string
     trading_day_ist: tradingDayIst(now), // "YYYY-MM-DD"
     minute_bucket: minuteBucket(now.getTime()),
